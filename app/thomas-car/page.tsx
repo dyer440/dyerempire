@@ -12,7 +12,7 @@ export default async function ThomasCarPage() {
   await auth.protect()
 
   const payments = await getPayments()
-  const totalPaid = payments.reduce((sum: number, p: { amount: number }) => sum + parseFloat(p.amount as unknown as string), 0)
+  const totalPaid = (payments as { amount: number }[]).reduce((sum, p) => sum + parseFloat(p.amount as unknown as string), 0)
   const balance = PURCHASE_PRICE - totalPaid
   const percentPaid = Math.min((totalPaid / PURCHASE_PRICE) * 100, 100)
 
