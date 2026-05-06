@@ -28,7 +28,7 @@ export default async function Home() {
 
         {/* Top right user button */}
         <div className="absolute top-6 right-8">
-          <UserButton afterSignOutUrl="/sign-in" />
+          <UserButton />
         </div>
 
         {/* Center content */}
