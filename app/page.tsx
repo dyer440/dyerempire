@@ -6,7 +6,7 @@ const NAV_ITEMS = [
   { label: 'The Coal Trader', href: '#' },
   { label: 'Rare Earths Intel', href: '#' },
   { label: 'Fusetrader', href: '#' },
-  { label: "Thomas' Car", href: '/thomas-car' },
+  { label: "Thomas's Car", href: '/thomas-car' },
 ]
 
 export default async function Home() {
