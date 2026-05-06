@@ -27,7 +27,7 @@ export default async function ThomasCarPage() {
               className="text-2xl tracking-[0.3em] uppercase"
               style={{ fontFamily: 'Georgia, serif', fontWeight: 300 }}
             >
-              Thomas' Car
+              Thomas's Car
             </h1>
             <p className="text-white/30 text-xs tracking-widest uppercase mt-1">Payment Ledger</p>
           </div>
