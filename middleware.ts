@@ -1,26 +1,43 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
+import { neon } from '@neondatabase/serverless'
 
-const ALLOWED_EMAILS = [
-  'david.dyer.24@gmail.com', // replace with your actual allowed emails
-]
+const ADMIN_EMAIL = 'david.dyer.24@gmail.com'
 
-const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)'])
+const isPublicRoute = createRouteMatcher([
+  '/sign-in(.*)',
+  '/sign-up(.*)',
+  '/not-authorized',
+])
 
 export default clerkMiddleware(async (auth, req) => {
   if (isPublicRoute(req)) return
 
-  const { userId, redirectToSignIn } = await auth()
+  const { userId, redirectToSignIn, sessionClaims } = await auth()
 
   if (!userId) return redirectToSignIn()
 
-  // Check allowlist
-  const { sessionClaims } = await auth()
   const email = sessionClaims?.email as string | undefined
 
-  if (email && !ALLOWED_EMAILS.includes(email)) {
-    const url = new URL('/not-authorized', req.url)
-    return NextResponse.redirect(url)
+  if (!email) {
+    return NextResponse.redirect(new URL('/not-authorized', req.url))
+  }
+
+  // Admin always allowed
+  if (email === ADMIN_EMAIL) return
+
+  // Check database allowlist
+  try {
+    const sql = neon(process.env.DATABASE_URL!)
+    const result = await sql`
+      SELECT email FROM allowed_users WHERE email = ${email} LIMIT 1
+    `
+    if (result.length === 0) {
+      return NextResponse.redirect(new URL('/not-authorized', req.url))
+    }
+  } catch (error) {
+    console.error('DB allowlist check failed:', error)
+    return NextResponse.redirect(new URL('/not-authorized', req.url))
   }
 })
 
