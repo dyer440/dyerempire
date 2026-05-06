@@ -82,7 +82,7 @@ export default async function AdminPage() {
           <div className="px-6 py-3 border-b border-white/10 text-xs tracking-widest uppercase text-white/40">
             Allowed Users ({users.length})
           </div>
-          {users.map((u: { email: string; name: string }) => (
+          {(users as { email: string; name: string }[]).map((u) => (
             <div key={u.email} className="flex items-center justify-between px-6 py-4 border-b border-white/5 hover:bg-white/5">
               <div>
                 <div className="text-sm text-white">{u.name || '—'}</div>
