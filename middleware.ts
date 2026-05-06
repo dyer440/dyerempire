@@ -2,7 +2,7 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 
 const ALLOWED_EMAILS = [
-  'your@email.com', // replace with your actual allowed emails
+  'david.dyer.24@gmail.com', // replace with your actual allowed emails
 ]
 
 const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)'])
