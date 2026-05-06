@@ -4,10 +4,6 @@ import { neon } from '@neondatabase/serverless'
 
 const ADMIN_EMAIL = 'david.dyer.24@gmail.com'
 
-const email = sessionClaims?.email as string | undefined
-console.log('sessionClaims:', JSON.stringify(sessionClaims))
-console.log('email:', email)
-
 const isPublicRoute = createRouteMatcher([
   '/sign-in(.*)',
   '/sign-up(.*)',
@@ -21,7 +17,11 @@ export default clerkMiddleware(async (auth, req) => {
 
   if (!userId) return redirectToSignIn()
 
+  console.log('sessionClaims:', JSON.stringify(sessionClaims))
+
   const email = sessionClaims?.email as string | undefined
+
+  console.log('email:', email)
 
   if (!email) {
     return NextResponse.redirect(new URL('/not-authorized', req.url))
