@@ -4,6 +4,10 @@ import { neon } from '@neondatabase/serverless'
 
 const ADMIN_EMAIL = 'david.dyer.24@gmail.com'
 
+const email = sessionClaims?.email as string | undefined
+console.log('sessionClaims:', JSON.stringify(sessionClaims))
+console.log('email:', email)
+
 const isPublicRoute = createRouteMatcher([
   '/sign-in(.*)',
   '/sign-up(.*)',
