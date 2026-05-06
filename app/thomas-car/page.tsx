@@ -125,7 +125,7 @@ export default async function ThomasCarPage() {
               No payments yet
             </div>
           )}
-          {payments.map((p: { id: number; amount: number; note: string; paid_on: string }) => (
+          {(payments as { id: number; amount: number; note: string; paid_on: string }[]).map((p) => (
             <div
               key={p.id}
               className="flex items-center justify-between px-6 py-4 border-b border-white/5 hover:bg-white/5"
