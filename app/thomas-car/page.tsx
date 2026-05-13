@@ -4,11 +4,6 @@ import { addPayment, deletePayment } from './actions'
 
 const PURCHASE_PRICE = 3500
 const DEADLINE = new Date('2026-07-31')
-const today = new Date()
-const daysLeft = Math.max(Math.ceil((DEADLINE.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)), 0)
-const weeksLeft = Math.max(Math.ceil(daysLeft / 7), 0)
-const dailyRequired = daysLeft > 0 ? balance / daysLeft : 0
-const weeklyRequired = weeksLeft > 0 ? balance / weeksLeft : 0
 
 async function getPayments() {
   return await sql`SELECT * FROM car_payments ORDER BY paid_on DESC, created_at DESC`
@@ -20,6 +15,11 @@ export default async function ThomasCarPage() {
   const payments = await getPayments()
   const totalPaid = (payments as { amount: number }[]).reduce((sum, p) => sum + parseFloat(p.amount as unknown as string), 0)
   const balance = PURCHASE_PRICE - totalPaid
+  const today = new Date()
+  const daysLeft = Math.max(Math.ceil((DEADLINE.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)), 0)
+  const weeksLeft = Math.max(Math.ceil(daysLeft / 7), 0)
+  const dailyRequired = daysLeft > 0 ? balance / daysLeft : 0
+  const weeklyRequired = weeksLeft > 0 ? balance / weeksLeft : 0
   const percentPaid = Math.min((totalPaid / PURCHASE_PRICE) * 100, 100)
 
   return (
