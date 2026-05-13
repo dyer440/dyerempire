@@ -3,6 +3,12 @@ import sql from '@/lib/db'
 import { addPayment, deletePayment } from './actions'
 
 const PURCHASE_PRICE = 3500
+const DEADLINE = new Date('2026-07-31')
+const today = new Date()
+const daysLeft = Math.max(Math.ceil((DEADLINE.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)), 0)
+const weeksLeft = Math.max(Math.ceil(daysLeft / 7), 0)
+const dailyRequired = daysLeft > 0 ? balance / daysLeft : 0
+const weeklyRequired = weeksLeft > 0 ? balance / weeksLeft : 0
 
 async function getPayments() {
   return await sql`SELECT * FROM car_payments ORDER BY paid_on DESC, created_at DESC`
@@ -60,6 +66,26 @@ export default async function ThomasCarPage() {
               style={{ fontFamily: 'Georgia, serif' }}
             >
               ${Math.max(balance, 0).toFixed(2)}
+            </div>
+          </div>
+        </div>
+
+        {/* Payoff Timeline */}
+        <div className="grid grid-cols-3 gap-4 mb-10">
+          <div className="border border-white/10 p-4">
+            <div className="text-white/30 text-xs tracking-widest uppercase mb-2">Deadline</div>
+            <div className="text-sm" style={{ fontFamily: 'Georgia, serif' }}>Jul 31, 2026</div>
+          </div>
+          <div className="border border-white/10 p-4">
+            <div className="text-white/30 text-xs tracking-widest uppercase mb-2">Daily</div>
+            <div className="text-xl text-amber-400" style={{ fontFamily: 'Georgia, serif' }}>
+              ${dailyRequired.toFixed(2)}
+            </div>
+          </div>
+          <div className="border border-white/10 p-4">
+            <div className="text-white/30 text-xs tracking-widest uppercase mb-2">Weekly</div>
+            <div className="text-xl text-amber-400" style={{ fontFamily: 'Georgia, serif' }}>
+              ${weeklyRequired.toFixed(2)}
             </div>
           </div>
         </div>
