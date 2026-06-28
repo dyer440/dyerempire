@@ -2,7 +2,7 @@ import { UserButton } from '@clerk/nextjs'
 import { auth } from '@clerk/nextjs/server'
 
 const NAV_ITEMS = [
-  { label: 'Real Estate', href: '/real-estate' },
+  { label: 'Real Estate', href: '/real-estate' }, 
   { label: 'The Coal Trader', href: '#' },
   { label: 'Rare Earths Intel', href: '#' },
   { label: 'Fusetrader', href: '#' },
