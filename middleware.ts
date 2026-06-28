@@ -1,10 +1,13 @@
+// middleware.ts  (REWRITE — homepage now public; allowlist unchanged otherwise)
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 import { neon } from '@neondatabase/serverless'
 
 const ADMIN_EMAIL = 'david.dyer.24@gmail.com'
 
+// '/' is exact — only the homepage is public, not everything under it.
 const isPublicRoute = createRouteMatcher([
+  '/',
   '/sign-in(.*)',
   '/sign-up(.*)',
   '/not-authorized',
@@ -14,28 +17,16 @@ export default clerkMiddleware(async (auth, req) => {
   if (isPublicRoute(req)) return
 
   const { userId, redirectToSignIn, sessionClaims } = await auth()
-
   if (!userId) return redirectToSignIn()
 
-  console.log('sessionClaims:', JSON.stringify(sessionClaims))
-
   const email = sessionClaims?.email as string | undefined
+  if (!email) return NextResponse.redirect(new URL('/not-authorized', req.url))
 
-  console.log('email:', email)
-
-  if (!email) {
-    return NextResponse.redirect(new URL('/not-authorized', req.url))
-  }
-
-  // Admin always allowed
   if (email === ADMIN_EMAIL) return
 
-  // Check database allowlist
   try {
     const sql = neon(process.env.DATABASE_URL!)
-    const result = await sql`
-      SELECT email FROM allowed_users WHERE email = ${email} LIMIT 1
-    `
+    const result = await sql`SELECT email FROM allowed_users WHERE email = ${email} LIMIT 1`
     if (result.length === 0) {
       return NextResponse.redirect(new URL('/not-authorized', req.url))
     }
