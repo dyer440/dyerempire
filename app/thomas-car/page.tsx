@@ -1,5 +1,8 @@
+// app/thomas-car/page.tsx  (REWRITE — adds the page_access gate; UI unchanged)
 import { auth } from '@clerk/nextjs/server'
+import { redirect } from 'next/navigation'
 import sql from '@/lib/db'
+import { getUserRole, canAccessPage } from '@/lib/access'
 import { addPayment, deletePayment } from './actions'
 
 const PURCHASE_PRICE = 3500
@@ -11,6 +14,11 @@ async function getPayments() {
 
 export default async function ThomasCarPage() {
   await auth.protect()
+
+  const { sessionClaims } = await auth()
+  const email = (sessionClaims?.email as string) || ''
+  const role = await getUserRole(email)
+  if (!(await canAccessPage(email, role, 'thomas-car'))) redirect('/not-authorized')
 
   const payments = await getPayments()
   const totalPaid = (payments as { amount: number }[]).reduce((sum, p) => sum + parseFloat(p.amount as unknown as string), 0)
@@ -37,7 +45,7 @@ export default async function ThomasCarPage() {
             </h1>
             <p className="text-white/30 text-xs tracking-widest uppercase mt-1">Payment Ledger</p>
           </div>
-          <a
+          
             href="/"
             className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors"
           >
