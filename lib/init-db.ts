@@ -1,8 +1,7 @@
-// lib/init-db.ts  (REWRITE — idempotent; includes future-phase tables so we never migrate)
+// lib/init-db.ts  (REWRITE — adds page_access table; everything else unchanged)
 import sql from './db'
 
 export async function initDb() {
-  // --- existing allowlist table (now with role) ---
   await sql`
     CREATE TABLE IF NOT EXISTS allowed_users (
       id SERIAL PRIMARY KEY,
@@ -20,24 +19,33 @@ export async function initDb() {
     ON CONFLICT (email) DO UPDATE SET role = 'admin'
   `
 
-  // --- owning parties (entities or individuals that hold equity) ---
+  // Per-page allowlist for standalone pages
+  await sql`
+    CREATE TABLE IF NOT EXISTS page_access (
+      id SERIAL PRIMARY KEY,
+      page_key TEXT NOT NULL,
+      email TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE (page_key, email)
+    )
+  `
+
   await sql`
     CREATE TABLE IF NOT EXISTS owners (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
-      type TEXT NOT NULL DEFAULT 'entity',      -- 'entity' | 'individual'
-      email TEXT,                                -- login this party maps to (for access)
+      type TEXT NOT NULL DEFAULT 'entity',
+      email TEXT,
       created_at TIMESTAMP DEFAULT NOW()
     )
   `
 
-  // --- properties (the building / parcel) ---
   await sql`
     CREATE TABLE IF NOT EXISTS properties (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
-      holding_entity TEXT,                       -- e.g. '500 West LLC' or 'Personal'
-      property_type TEXT,                        -- 'single_family' | 'duplex' | ...
+      holding_entity TEXT,
+      property_type TEXT,
       address TEXT,
       city TEXT,
       state TEXT,
@@ -50,7 +58,6 @@ export async function initDb() {
     )
   `
 
-  // --- rentable units (a duplex has two; an SFH has one) ---
   await sql`
     CREATE TABLE IF NOT EXISTS units (
       id SERIAL PRIMARY KEY,
@@ -61,7 +68,6 @@ export async function initDb() {
     )
   `
 
-  // --- equity splits (drives distributions AND access) ---
   await sql`
     CREATE TABLE IF NOT EXISTS property_owners (
       id SERIAL PRIMARY KEY,
@@ -72,13 +78,12 @@ export async function initDb() {
     )
   `
 
-  // --- the ledger: one categorized row per dollar in or out ---
   await sql`
     CREATE TABLE IF NOT EXISTS transactions (
       id SERIAL PRIMARY KEY,
       property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
       unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
-      type TEXT NOT NULL,                         -- 'income' | 'expense'
+      type TEXT NOT NULL,
       category TEXT NOT NULL,
       amount DECIMAL(12,2) NOT NULL,
       txn_date DATE NOT NULL,
@@ -91,7 +96,6 @@ export async function initDb() {
   await sql`CREATE INDEX IF NOT EXISTS idx_txn_property ON transactions(property_id)`
   await sql`CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(txn_date)`
 
-  // --- Phase 2+ tables (created now so later phases drop in without migration) ---
   await sql`
     CREATE TABLE IF NOT EXISTS tenants (
       id SERIAL PRIMARY KEY,
@@ -116,7 +120,7 @@ export async function initDb() {
     CREATE TABLE IF NOT EXISTS rent_charges (
       id SERIAL PRIMARY KEY,
       lease_id INTEGER NOT NULL REFERENCES leases(id) ON DELETE CASCADE,
-      period_month DATE NOT NULL,                -- first of the month owed
+      period_month DATE NOT NULL,
       amount_due DECIMAL(12,2) NOT NULL,
       status TEXT DEFAULT 'open',
       created_at TIMESTAMP DEFAULT NOW(),
@@ -129,7 +133,7 @@ export async function initDb() {
       lease_id INTEGER NOT NULL REFERENCES leases(id) ON DELETE CASCADE,
       amount_held DECIMAL(12,2) NOT NULL,
       received_on DATE, returned_on DATE,
-      status TEXT DEFAULT 'held',                -- 'held' | 'returned' | 'forfeited'
+      status TEXT DEFAULT 'held',
       notes TEXT
     )
   `
@@ -137,7 +141,7 @@ export async function initDb() {
     CREATE TABLE IF NOT EXISTS obligations (
       id SERIAL PRIMARY KEY,
       property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-      type TEXT NOT NULL,                         -- 'insurance' | 'property_tax' | 'mortgage' | 'other'
+      type TEXT NOT NULL,
       description TEXT, amount DECIMAL(12,2),
       due_date DATE, frequency TEXT DEFAULT 'annual',
       status TEXT DEFAULT 'upcoming',
@@ -148,7 +152,7 @@ export async function initDb() {
   await sql`
     CREATE TABLE IF NOT EXISTS distributions (
       id SERIAL PRIMARY KEY,
-      period TEXT NOT NULL,                       -- e.g. '2026-Q1'
+      period TEXT NOT NULL,
       property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
       owner_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
       amount DECIMAL(12,2) NOT NULL,
