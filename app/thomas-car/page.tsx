@@ -1,4 +1,4 @@
-// app/thomas-car/page.tsx  (REWRITE — restores the stripped <a on the Home link)
+// app/thomas-car/page.tsx  (page_access gate; restores the Home link)
 import { auth } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
 import sql from '@/lib/db'
@@ -45,7 +45,7 @@ export default async function ThomasCarPage() {
             </h1>
             <p className="text-white/30 text-xs tracking-widest uppercase mt-1">Payment Ledger</p>
           </div>
-          
+          <a
             href="/"
             className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors"
           >
