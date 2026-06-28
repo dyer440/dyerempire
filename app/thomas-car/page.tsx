@@ -1,4 +1,4 @@
-// app/thomas-car/page.tsx  (REWRITE — adds the page_access gate; UI unchanged)
+// app/thomas-car/page.tsx  (REWRITE — restores the stripped <a on the Home link)
 import { auth } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
 import sql from '@/lib/db'
