@@ -1,5 +1,8 @@
 // app/page.tsx  (public homepage; sign-in affordance when logged out)
-import { UserButton, SignedIn, SignedOut } from '@clerk/nextjs'
+// Uses auth() to detect sign-in state instead of <SignedIn>/<SignedOut>,
+// which aren't exported by the installed Clerk version's RSC entry point.
+import { UserButton } from '@clerk/nextjs'
+import { auth } from '@clerk/nextjs/server'
 
 const NAV_ITEMS = [
   { label: 'Real Estate', href: '/real-estate' },
@@ -9,7 +12,11 @@ const NAV_ITEMS = [
   { label: "Thomas's Car", href: '/thomas-car' },
 ]
 
-export default function Home() {
+export default async function Home() {
+  // Public route — auth() returns userId: null when signed out (no redirect).
+  const { userId } = await auth()
+  const signedIn = Boolean(userId)
+
   return (
     <main className="relative min-h-screen w-full overflow-hidden">
       {/* Background Image */}
@@ -26,10 +33,9 @@ export default function Home() {
 
         {/* Top right: user button when signed in, sign-in link when not */}
         <div className="absolute top-6 right-8">
-          <SignedIn>
+          {signedIn ? (
             <UserButton />
-          </SignedIn>
-          <SignedOut>
+          ) : (
             <a
               href="/sign-in"
               className="text-white/70 hover:text-white border border-white/30 hover:border-white/80 hover:bg-white/10 transition-all duration-300 py-2 px-5 text-xs tracking-widest uppercase"
@@ -37,7 +43,7 @@ export default function Home() {
             >
               Sign In
             </a>
-          </SignedOut>
+          )}
         </div>
 
         {/* Center content */}
