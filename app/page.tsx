@@ -1,17 +1,15 @@
-import { UserButton } from '@clerk/nextjs'
-import { auth } from '@clerk/nextjs/server'
+// app/page.tsx  (REWRITE — public homepage; sign-in affordance when logged out)
+import { UserButton, SignedIn, SignedOut } from '@clerk/nextjs'
 
 const NAV_ITEMS = [
-  { label: 'Real Estate', href: '/real-estate' }, 
+  { label: 'Real Estate', href: '/real-estate' },
   { label: 'The Coal Trader', href: '#' },
   { label: 'Rare Earths Intel', href: '#' },
   { label: 'Fusetrader', href: '#' },
   { label: "Thomas's Car", href: '/thomas-car' },
 ]
 
-export default async function Home() {
-  await auth.protect()
-
+export default function Home() {
   return (
     <main className="relative min-h-screen w-full overflow-hidden">
       {/* Background Image */}
@@ -26,9 +24,20 @@ export default async function Home() {
       {/* Content */}
       <div className="relative z-10 flex flex-col min-h-screen">
 
-        {/* Top right user button */}
+        {/* Top right: user button when signed in, sign-in link when not */}
         <div className="absolute top-6 right-8">
-          <UserButton />
+          <SignedIn>
+            <UserButton />
+          </SignedIn>
+          <SignedOut>
+            
+              href="/sign-in"
+              className="text-white/70 hover:text-white border border-white/30 hover:border-white/80 hover:bg-white/10 transition-all duration-300 py-2 px-5 text-xs tracking-widest uppercase"
+              style={{ fontFamily: "'Georgia', serif", letterSpacing: '0.2em', backdropFilter: 'blur(4px)' }}
+            >
+              Sign In
+            </a>
+          </SignedOut>
         </div>
 
         {/* Center content */}
@@ -50,7 +59,7 @@ export default async function Home() {
           {/* Nav Links */}
           <nav className="flex flex-col items-center gap-4 w-full max-w-xs">
             {NAV_ITEMS.map((item) => (
-              <a
+              
                 key={item.label}
                 href={item.href}
                 className="w-full text-center py-3 px-8 text-white/90 hover:text-white border border-white/30 hover:border-white/80 hover:bg-white/10 transition-all duration-300 tracking-widest uppercase text-sm"
