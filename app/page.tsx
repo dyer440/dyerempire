@@ -1,4 +1,4 @@
-// app/page.tsx  (REWRITE — restores the two stripped <a tags: Sign In link + nav link)
+// app/page.tsx  (public homepage; sign-in affordance when logged out)
 import { UserButton, SignedIn, SignedOut } from '@clerk/nextjs'
 
 const NAV_ITEMS = [
@@ -30,7 +30,7 @@ export default function Home() {
             <UserButton />
           </SignedIn>
           <SignedOut>
-            
+            <a
               href="/sign-in"
               className="text-white/70 hover:text-white border border-white/30 hover:border-white/80 hover:bg-white/10 transition-all duration-300 py-2 px-5 text-xs tracking-widest uppercase"
               style={{ fontFamily: "'Georgia', serif", letterSpacing: '0.2em', backdropFilter: 'blur(4px)' }}
@@ -59,7 +59,7 @@ export default function Home() {
           {/* Nav Links */}
           <nav className="flex flex-col items-center gap-4 w-full max-w-xs">
             {NAV_ITEMS.map((item) => (
-              
+              <a
                 key={item.label}
                 href={item.href}
                 className="w-full text-center py-3 px-8 text-white/90 hover:text-white border border-white/30 hover:border-white/80 hover:bg-white/10 transition-all duration-300 tracking-widest uppercase text-sm"
