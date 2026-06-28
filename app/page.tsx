@@ -1,4 +1,4 @@
-// app/page.tsx  (REWRITE — public homepage; sign-in affordance when logged out)
+// app/page.tsx  (REWRITE — restores the two stripped <a tags: Sign In link + nav link)
 import { UserButton, SignedIn, SignedOut } from '@clerk/nextjs'
 
 const NAV_ITEMS = [
