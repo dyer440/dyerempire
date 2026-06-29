@@ -38,7 +38,7 @@ export default async function RealEstatePage() {
   }
 
   return (
-    <main className="min-h-screen bg-black text-white p-6 md:p-10">
+    <main className="re-light min-h-screen text-white p-6 md:p-10">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center justify-between mb-10">
           <div>
