@@ -1,4 +1,4 @@
-// app/real-estate/[id]/page.tsx  (UPDATED — actual vs forecast split; mark-paid; schedules link)
+// app/real-estate/[id]/page.tsx  (UPDATED — SQL-based YTD (fixes $0), date-range filter on ledger)
 import { auth } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
@@ -13,9 +13,16 @@ type Txn = {
   description: string | null; unit_label: string | null; status: string
 }
 
-export default async function PropertyPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function PropertyPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>
+  searchParams: Promise<{ from?: string; to?: string; all?: string }>
+}) {
   await auth.protect()
   const { id } = await params
+  const sp = await searchParams
   const propertyId = Number(id)
 
   const { sessionClaims } = await auth()
@@ -40,34 +47,48 @@ export default async function PropertyPage({ params }: { params: Promise<{ id: s
   const units = (await sql`SELECT id, label FROM units WHERE property_id = ${propertyId} ORDER BY id`) as
     { id: number; label: string }[]
 
-  // Actual ledger (paid/recorded)
+  // ---- Date range for the ledger view ----
+  const year = new Date().getFullYear()
+  const isAll = sp.all === '1'
+  const fromDate = isAll ? '1900-01-01' : (sp.from || `${year}-01-01`)
+  const toDate = isAll ? '2999-12-31' : (sp.to || `${year}-12-31`)
+
+  // ---- YTD totals computed in SQL (actuals, current year) — type-safe, no JS date math ----
+  const ytd = (await sql`
+    SELECT type, COALESCE(SUM(amount), 0)::float8 AS total
+    FROM transactions
+    WHERE property_id = ${propertyId} AND status = 'actual'
+      AND EXTRACT(YEAR FROM txn_date) = ${year}
+    GROUP BY type
+  `) as { type: string; total: number }[]
+  let incomeYtd = 0, expenseYtd = 0
+  for (const r of ytd) { if (r.type === 'income') incomeYtd = r.total; else expenseYtd = r.total }
+  const netYtd = incomeYtd - expenseYtd
+
+  // ---- Actual ledger, filtered to the selected range ----
   const actuals = (await sql`
     SELECT t.id, t.type, t.category, t.amount, t.txn_date, t.description, t.status, u.label AS unit_label
     FROM transactions t LEFT JOIN units u ON u.id = t.unit_id
     WHERE t.property_id = ${propertyId} AND t.status = 'actual'
+      AND t.txn_date BETWEEN ${fromDate} AND ${toDate}
     ORDER BY t.txn_date DESC, t.created_at DESC
   `) as Txn[]
 
-  // Upcoming forecast (scheduled, not yet paid)
+  // Range net of the filtered rows (no date math needed — SQL already filtered)
+  let rangeIncome = 0, rangeExpense = 0
+  for (const t of actuals) {
+    const a = parseFloat(t.amount)
+    if (t.type === 'income') rangeIncome += a; else rangeExpense += a
+  }
+  const rangeNet = rangeIncome - rangeExpense
+
+  // ---- Upcoming forecast (scheduled, not yet paid) ----
   const forecasts = (await sql`
     SELECT t.id, t.type, t.category, t.amount, t.txn_date, t.description, t.status, u.label AS unit_label
     FROM transactions t LEFT JOIN units u ON u.id = t.unit_id
     WHERE t.property_id = ${propertyId} AND t.status = 'forecast'
     ORDER BY t.txn_date ASC
   `) as Txn[]
-
-  // YTD on ACTUALS only
-  const yearStart = `${new Date().getFullYear()}-01-01`
-  let incomeYtd = 0, expenseYtd = 0
-  for (const t of actuals) {
-    if (t.txn_date >= yearStart) {
-      const a = parseFloat(t.amount)
-      if (t.type === 'income') incomeYtd += a; else expenseYtd += a
-    }
-  }
-  const netYtd = incomeYtd - expenseYtd
-
-  // Projected net over next 12 months = forecast income − forecast expense
   let projIncome = 0, projExpense = 0
   for (const t of forecasts) {
     const a = parseFloat(t.amount)
@@ -76,6 +97,15 @@ export default async function PropertyPage({ params }: { params: Promise<{ id: s
   const projNet = projIncome - projExpense
 
   const todayStr = new Date().toISOString().split('T')[0]
+  const fmt = (n: number) => `$${n.toFixed(2)}`
+  const presetActive = (label: string) => {
+    if (label === 'all') return isAll
+    if (label === 'year') return !isAll && sp.from === `${year}-01-01` && sp.to === `${year}-12-31`
+    if (label === 'last') return !isAll && sp.from === `${year - 1}-01-01` && sp.to === `${year - 1}-12-31`
+    return false
+  }
+  const presetCls = (on: boolean) =>
+    `text-xs tracking-widest uppercase transition-colors ${on ? 'text-white' : 'text-white/30 hover:text-white'}`
 
   return (
     <main className="min-h-screen bg-black text-white p-6 md:p-10">
@@ -115,20 +145,20 @@ export default async function PropertyPage({ params }: { params: Promise<{ id: s
           </div>
         </div>
 
-        {/* YTD summary (actuals) */}
+        {/* YTD summary (actuals, current year) */}
         <div className="grid grid-cols-3 gap-4 mb-4">
           <div className="border border-white/10 p-4">
             <div className="text-white/30 text-xs tracking-widest uppercase mb-2">Income YTD</div>
-            <div className="text-xl text-emerald-400" style={{ fontFamily: 'Georgia, serif' }}>${incomeYtd.toFixed(2)}</div>
+            <div className="text-xl text-emerald-400" style={{ fontFamily: 'Georgia, serif' }}>{fmt(incomeYtd)}</div>
           </div>
           <div className="border border-white/10 p-4">
             <div className="text-white/30 text-xs tracking-widest uppercase mb-2">Expenses YTD</div>
-            <div className="text-xl text-rose-400" style={{ fontFamily: 'Georgia, serif' }}>${expenseYtd.toFixed(2)}</div>
+            <div className="text-xl text-rose-400" style={{ fontFamily: 'Georgia, serif' }}>{fmt(expenseYtd)}</div>
           </div>
           <div className="border border-white/10 p-4">
             <div className="text-white/30 text-xs tracking-widest uppercase mb-2">Net YTD</div>
             <div className={`text-xl ${netYtd >= 0 ? 'text-emerald-400' : 'text-amber-400'}`} style={{ fontFamily: 'Georgia, serif' }}>
-              ${netYtd.toFixed(2)}
+              {fmt(netYtd)}
             </div>
           </div>
         </div>
@@ -137,7 +167,7 @@ export default async function PropertyPage({ params }: { params: Promise<{ id: s
         <div className="border border-dashed border-amber-400/30 p-4 mb-8 flex items-center justify-between">
           <div className="text-amber-400/70 text-xs tracking-widest uppercase">Projected net · next 12 mo (scheduled)</div>
           <div className={`text-lg ${projNet >= 0 ? 'text-emerald-400/80' : 'text-amber-400'}`} style={{ fontFamily: 'Georgia, serif' }}>
-            ${projNet.toFixed(2)}
+            {fmt(projNet)}
           </div>
         </div>
 
@@ -189,7 +219,7 @@ export default async function PropertyPage({ params }: { params: Promise<{ id: s
                 <div key={t.id} className="flex items-center justify-between px-6 py-3 border-b border-white/5">
                   <div className="flex items-center gap-6">
                     <div className={`text-sm w-24 ${income ? 'text-emerald-400/60' : 'text-rose-400/60'}`} style={{ fontFamily: 'Georgia, serif' }}>
-                      {income ? '+' : '−'}${a.toFixed(2)}
+                      {income ? '+' : '−'}{fmt(a)}
                     </div>
                     <div>
                       <div className="text-sm text-white/50">{t.category}</div>
@@ -221,13 +251,42 @@ export default async function PropertyPage({ params }: { params: Promise<{ id: s
           </div>
         )}
 
+        {/* Ledger filter controls */}
+        <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
+          <form method="get" className="flex items-end gap-2">
+            <div>
+              <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">From</label>
+              <input name="from" type="date" defaultValue={isAll ? '' : fromDate}
+                className="bg-white/5 border border-white/20 px-3 py-1.5 text-white text-xs focus:outline-none focus:border-white/50" />
+            </div>
+            <div>
+              <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">To</label>
+              <input name="to" type="date" defaultValue={isAll ? '' : toDate}
+                className="bg-white/5 border border-white/20 px-3 py-1.5 text-white text-xs focus:outline-none focus:border-white/50" />
+            </div>
+            <button type="submit" className="border border-white/30 px-4 py-1.5 text-xs tracking-widest uppercase hover:bg-white/10 transition-all">
+              Apply
+            </button>
+          </form>
+          <div className="flex items-center gap-4">
+            <Link href={`/real-estate/${propertyId}?from=${year}-01-01&to=${year}-12-31`} className={presetCls(presetActive('year'))}>This Year</Link>
+            <Link href={`/real-estate/${propertyId}?from=${year - 1}-01-01&to=${year - 1}-12-31`} className={presetCls(presetActive('last'))}>Last Year</Link>
+            <Link href={`/real-estate/${propertyId}?all=1`} className={presetCls(presetActive('all'))}>All</Link>
+          </div>
+        </div>
+
         {/* Actual ledger */}
         <div className="border border-white/10">
-          <div className="px-6 py-3 border-b border-white/10 text-xs tracking-widest uppercase text-white/40">
-            Ledger · actuals ({actuals.length})
+          <div className="px-6 py-3 border-b border-white/10 flex items-center justify-between">
+            <span className="text-xs tracking-widest uppercase text-white/40">
+              Ledger · actuals ({actuals.length})
+            </span>
+            <span className="text-xs tracking-widest uppercase text-white/40">
+              range net <span className={rangeNet >= 0 ? 'text-emerald-400' : 'text-amber-400'} style={{ fontFamily: 'Georgia, serif' }}>{fmt(rangeNet)}</span>
+            </span>
           </div>
           {actuals.length === 0 && (
-            <div className="px-6 py-8 text-center text-white/20 text-sm tracking-widest uppercase">No transactions yet</div>
+            <div className="px-6 py-8 text-center text-white/20 text-sm tracking-widest uppercase">No transactions in range</div>
           )}
           {actuals.map((t) => {
             const a = parseFloat(t.amount)
@@ -236,7 +295,7 @@ export default async function PropertyPage({ params }: { params: Promise<{ id: s
               <div key={t.id} className="flex items-center justify-between px-6 py-4 border-b border-white/5 hover:bg-white/5">
                 <div className="flex items-center gap-6">
                   <div className={`text-sm w-24 ${income ? 'text-emerald-400' : 'text-rose-400'}`} style={{ fontFamily: 'Georgia, serif' }}>
-                    {income ? '+' : '−'}${a.toFixed(2)}
+                    {income ? '+' : '−'}{fmt(a)}
                   </div>
                   <div>
                     <div className="text-sm text-white/70">{t.category}</div>
