@@ -1,4 +1,4 @@
-// app/real-estate/[id]/periods/[period]/page.tsx  (NEW — quarter P&L, reserve, distribution, close)
+// app/real-estate/[id]/periods/[period]/page.tsx  (UPDATED — editable distribution total on Record)
 import { auth } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
@@ -42,6 +42,7 @@ export default async function PeriodDetailPage({
     ORDER BY d.amount DESC
   `) as { amount: string; owner_id: number; name: string }[]
   const isRecorded = recorded.length > 0
+  const recordedTotal = recorded.reduce((s, r) => s + parseFloat(r.amount), 0)
 
   const fmt = (n: number) => `$${n.toFixed(2)}`
   const Row = ({ label: l, value, tone, dim }: { label: string; value: string; tone?: string; dim?: boolean }) => (
@@ -83,16 +84,12 @@ export default async function PeriodDetailPage({
         {/* Reserve */}
         <div className="border border-dashed border-amber-400/30 p-6 mb-6">
           <div className="text-amber-400/70 text-xs tracking-widest uppercase mb-3">Tax / insurance reserve</div>
-          <Row label={`Annual target (tax + insurance est.)`} value={fmt(c.annualReserve)} dim />
+          <Row label="Annual target (tax + insurance est.)" value={fmt(c.annualReserve)} dim />
           <Row label="This quarter's reserve set-aside" value={`(${fmt(c.reserveTargetQuarter)})`} tone="text-amber-400/80" />
           <div className="border-t border-white/10 my-1" />
           <Row label={`Reserve accrued YTD (×${c.q})`} value={fmt(c.reserveAccrued)} dim />
           <Row label="Tax / insurance paid YTD" value={`(${fmt(c.reservedPaidYtd)})`} dim />
-          <Row
-            label="Reserve balance"
-            value={fmt(c.reserveBalance)}
-            tone={c.reserveBalance >= 0 ? 'text-emerald-400' : 'text-red-400'}
-          />
+          <Row label="Reserve balance" value={fmt(c.reserveBalance)} tone={c.reserveBalance >= 0 ? 'text-emerald-400' : 'text-red-400'} />
           {c.reserveBalance < 0 && (
             <p className="text-[11px] text-red-400/70 mt-2">
               Under-reserved: tax/insurance paid YTD exceeds what's been set aside — this is the cash pinch. Funding
@@ -107,11 +104,7 @@ export default async function PeriodDetailPage({
           <Row label="Operating net" value={fmt(c.operatingNet)} dim />
           <Row label="Less reserve set-aside" value={`(${fmt(c.reserveTargetQuarter)})`} dim />
           <div className="border-t border-white/10 my-1" />
-          <Row
-            label="Distributable (smoothed)"
-            value={fmt(c.distributable)}
-            tone={c.distributable >= 0 ? 'text-emerald-400' : 'text-amber-400'}
-          />
+          <Row label="Distributable (smoothed)" value={fmt(c.distributable)} tone={c.distributable >= 0 ? 'text-emerald-400' : 'text-amber-400'} />
 
           <div className="mt-4 space-y-1">
             {c.split.map((s) => (
@@ -121,16 +114,18 @@ export default async function PeriodDetailPage({
               </div>
             ))}
           </div>
-
           {c.distributable <= 0 && (
-            <p className="text-[11px] text-white/40 mt-3">No distributable cash this quarter (operating net below the reserve set-aside).</p>
+            <p className="text-[11px] text-white/40 mt-3">No smoothed distributable this quarter — you can still record an actual amount below.</p>
           )}
         </div>
 
         {/* Recorded distribution status */}
         {isRecorded && (
           <div className="border border-emerald-400/20 p-6 mb-6">
-            <div className="text-emerald-400/70 text-xs tracking-widest uppercase mb-3">Recorded distribution</div>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-emerald-400/70 text-xs tracking-widest uppercase">Recorded distribution</span>
+              <span className="text-white/50 text-xs" style={{ fontFamily: 'Georgia, serif' }}>total {fmt(recordedTotal)}</span>
+            </div>
             {recorded.map((r) => (
               <div key={r.owner_id} className="flex justify-between text-sm">
                 <span className="text-white/70">{r.name}</span>
@@ -141,13 +136,18 @@ export default async function PeriodDetailPage({
         )}
 
         {/* Actions */}
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-end gap-3">
           {!isRecorded ? (
-            <form action={recordDistribution}>
+            <form action={recordDistribution} className="flex items-end gap-2">
               <input type="hidden" name="property_id" value={propertyId} />
               <input type="hidden" name="period" value={period} />
-              <button type="submit" disabled={c.distributable <= 0}
-                className="border border-emerald-400/30 text-emerald-400/80 px-5 py-2 text-xs tracking-widest uppercase hover:bg-emerald-400/10 transition-all disabled:opacity-30">
+              <div>
+                <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">Distribution total</label>
+                <input name="amount" type="number" step="0.01" min="0" defaultValue={Math.max(c.distributable, 0).toFixed(2)}
+                  className="w-32 bg-white/5 border border-white/20 px-3 py-1.5 text-white text-sm focus:outline-none focus:border-white/50" />
+              </div>
+              <button type="submit"
+                className="border border-emerald-400/30 text-emerald-400/80 px-5 py-2 text-xs tracking-widest uppercase hover:bg-emerald-400/10 transition-all">
                 Record distribution
               </button>
             </form>
@@ -182,8 +182,8 @@ export default async function PeriodDetailPage({
           )}
         </div>
         <p className="text-[11px] text-white/25 mt-4">
-          “Distributable (smoothed)” holds back the reserve set-aside each quarter so the tax lump doesn’t gut one
-          period — compare it to “all-in net” to see the difference vs. distributing raw cash.
+          The distribution total defaults to the smoothed distributable. Override it to match an actual distribution —
+          e.g. for history where you held back a specific bill — and it’s split by ownership %. Record, then close.
         </p>
       </div>
     </main>
