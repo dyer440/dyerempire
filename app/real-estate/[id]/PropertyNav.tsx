@@ -14,6 +14,7 @@ export default function PropertyNav({
   const tabs: { label: string; href: string; active: boolean }[] = [
     { label: 'Overview', href: base, active: pathname === base },
     { label: 'Capital', href: `${base}/capital`, active: pathname === `${base}/capital` },
+    { label: 'Returns', href: `${base}/returns`, active: pathname === `${base}/returns` },
     ...(canEdit
       ? [
           { label: 'Schedules', href: `${base}/schedules`, active: pathname.startsWith(`${base}/schedules`) },
