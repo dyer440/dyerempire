@@ -24,3 +24,10 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Fixes unreadable white-on-white dropdown options on the dark theme */
+select option,
+select optgroup {
+  background-color: #0a0a0a;
+  color: #ffffff;
+}
