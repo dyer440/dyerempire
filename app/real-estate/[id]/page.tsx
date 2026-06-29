@@ -1,4 +1,4 @@
-// app/real-estate/[id]/page.tsx  (UPDATED — SQL-based YTD (fixes $0), date-range filter on ledger)
+// app/real-estate/[id]/page.tsx  (UPDATED — date filter scopes scheduled list too; remove forecast; month stepper)
 import { auth } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
@@ -6,11 +6,21 @@ import sql from '@/lib/db'
 import { getUserRole, canAccessProperty, canEdit } from '@/lib/access'
 import { INCOME_CATEGORIES, EXPENSE_CATEGORIES } from '@/lib/categories'
 import { addTransaction, deleteTransaction } from '../actions'
-import { markForecastPaid } from '../recurring/actions'
+import { markForecastPaid, deleteForecast } from '../recurring/actions'
 
 type Txn = {
   id: number; type: string; category: string; amount: string; txn_date: string
   description: string | null; unit_label: string | null; status: string
+}
+
+const pad = (n: number) => String(n).padStart(2, '0')
+function monthRange(y: number, m1: number) {
+  // m1 is 1-indexed; handle rollover
+  let yy = y, mm = m1
+  if (mm < 1) { mm = 12; yy-- }
+  if (mm > 12) { mm = 1; yy++ }
+  const lastDay = new Date(yy, mm, 0).getDate()
+  return { from: `${yy}-${pad(mm)}-01`, to: `${yy}-${pad(mm)}-${pad(lastDay)}` }
 }
 
 export default async function PropertyPage({
@@ -47,13 +57,14 @@ export default async function PropertyPage({
   const units = (await sql`SELECT id, label FROM units WHERE property_id = ${propertyId} ORDER BY id`) as
     { id: number; label: string }[]
 
-  // ---- Date range for the ledger view ----
+  // ---- Date range (scopes BOTH the ledger and the scheduled list) ----
   const year = new Date().getFullYear()
   const isAll = sp.all === '1'
+  const isDefault = !isAll && !sp.from && !sp.to
   const fromDate = isAll ? '1900-01-01' : (sp.from || `${year}-01-01`)
   const toDate = isAll ? '2999-12-31' : (sp.to || `${year}-12-31`)
 
-  // ---- YTD totals computed in SQL (actuals, current year) — type-safe, no JS date math ----
+  // ---- YTD totals in SQL (actuals, current year) — always full year regardless of filter ----
   const ytd = (await sql`
     SELECT type, COALESCE(SUM(amount), 0)::float8 AS total
     FROM transactions
@@ -65,7 +76,18 @@ export default async function PropertyPage({
   for (const r of ytd) { if (r.type === 'income') incomeYtd = r.total; else expenseYtd = r.total }
   const netYtd = incomeYtd - expenseYtd
 
-  // ---- Actual ledger, filtered to the selected range ----
+  // ---- Projected net over the FULL forecast horizon (banner stays 12-mo, unfiltered) ----
+  const proj = (await sql`
+    SELECT type, COALESCE(SUM(amount), 0)::float8 AS total
+    FROM transactions
+    WHERE property_id = ${propertyId} AND status = 'forecast'
+    GROUP BY type
+  `) as { type: string; total: number }[]
+  let projIncome = 0, projExpense = 0
+  for (const r of proj) { if (r.type === 'income') projIncome = r.total; else projExpense = r.total }
+  const projNet = projIncome - projExpense
+
+  // ---- Actual ledger, filtered to range ----
   const actuals = (await sql`
     SELECT t.id, t.type, t.category, t.amount, t.txn_date, t.description, t.status, u.label AS unit_label
     FROM transactions t LEFT JOIN units u ON u.id = t.unit_id
@@ -73,39 +95,37 @@ export default async function PropertyPage({
       AND t.txn_date BETWEEN ${fromDate} AND ${toDate}
     ORDER BY t.txn_date DESC, t.created_at DESC
   `) as Txn[]
-
-  // Range net of the filtered rows (no date math needed — SQL already filtered)
   let rangeIncome = 0, rangeExpense = 0
-  for (const t of actuals) {
-    const a = parseFloat(t.amount)
-    if (t.type === 'income') rangeIncome += a; else rangeExpense += a
-  }
+  for (const t of actuals) { const a = parseFloat(t.amount); if (t.type === 'income') rangeIncome += a; else rangeExpense += a }
   const rangeNet = rangeIncome - rangeExpense
 
-  // ---- Upcoming forecast (scheduled, not yet paid) ----
+  // ---- Scheduled (forecast), filtered to the SAME range ----
   const forecasts = (await sql`
     SELECT t.id, t.type, t.category, t.amount, t.txn_date, t.description, t.status, u.label AS unit_label
     FROM transactions t LEFT JOIN units u ON u.id = t.unit_id
     WHERE t.property_id = ${propertyId} AND t.status = 'forecast'
+      AND t.txn_date BETWEEN ${fromDate} AND ${toDate}
     ORDER BY t.txn_date ASC
   `) as Txn[]
-  let projIncome = 0, projExpense = 0
-  for (const t of forecasts) {
-    const a = parseFloat(t.amount)
-    if (t.type === 'income') projIncome += a; else projExpense += a
-  }
-  const projNet = projIncome - projExpense
+  let schedIncome = 0, schedExpense = 0
+  for (const t of forecasts) { const a = parseFloat(t.amount); if (t.type === 'income') schedIncome += a; else schedExpense += a }
+  const schedNet = schedIncome - schedExpense
 
   const todayStr = new Date().toISOString().split('T')[0]
   const fmt = (n: number) => `$${n.toFixed(2)}`
-  const presetActive = (label: string) => {
-    if (label === 'all') return isAll
-    if (label === 'year') return !isAll && sp.from === `${year}-01-01` && sp.to === `${year}-12-31`
-    if (label === 'last') return !isAll && sp.from === `${year - 1}-01-01` && sp.to === `${year - 1}-12-31`
-    return false
-  }
+
+  // ---- Filter preset helpers ----
+  const base = `/real-estate/${propertyId}`
+  const yearActive = isDefault || (!isAll && sp.from === `${year}-01-01` && sp.to === `${year}-12-31`)
+  const lastActive = !isAll && sp.from === `${year - 1}-01-01` && sp.to === `${year - 1}-12-31`
   const presetCls = (on: boolean) =>
     `text-xs tracking-widest uppercase transition-colors ${on ? 'text-white' : 'text-white/30 hover:text-white'}`
+
+  // Month stepper relative to current fromDate
+  const [fy, fmth] = fromDate.split('-').map(Number)
+  const prevM = monthRange(fy, fmth - 1)
+  const nextM = monthRange(fy, fmth + 1)
+  const thisM = monthRange(year, new Date().getMonth() + 1)
 
   return (
     <main className="min-h-screen bg-black text-white p-6 md:p-10">
@@ -123,7 +143,7 @@ export default async function PropertyPage({
               ← All Properties
             </Link>
             {editable && (
-              <Link href={`/real-estate/${propertyId}/schedules`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
+              <Link href={`${base}/schedules`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
                 Schedules →
               </Link>
             )}
@@ -163,7 +183,7 @@ export default async function PropertyPage({
           </div>
         </div>
 
-        {/* Projected (forecast) banner */}
+        {/* Projected (forecast) banner — full 12-mo horizon */}
         <div className="border border-dashed border-amber-400/30 p-4 mb-8 flex items-center justify-between">
           <div className="text-amber-400/70 text-xs tracking-widest uppercase">Projected net · next 12 mo (scheduled)</div>
           <div className={`text-lg ${projNet >= 0 ? 'text-emerald-400/80' : 'text-amber-400'}`} style={{ fontFamily: 'Georgia, serif' }}>
@@ -206,11 +226,42 @@ export default async function PropertyPage({
           </form>
         )}
 
-        {/* Upcoming scheduled (forecast) */}
+        {/* ---- Date filter (applies to ledger AND scheduled) ---- */}
+        <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
+          <form method="get" className="flex items-end gap-2">
+            <div>
+              <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">From</label>
+              <input name="from" type="date" defaultValue={isAll ? '' : fromDate}
+                className="bg-white/5 border border-white/20 px-3 py-1.5 text-white text-xs focus:outline-none focus:border-white/50" />
+            </div>
+            <div>
+              <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">To</label>
+              <input name="to" type="date" defaultValue={isAll ? '' : toDate}
+                className="bg-white/5 border border-white/20 px-3 py-1.5 text-white text-xs focus:outline-none focus:border-white/50" />
+            </div>
+            <button type="submit" className="border border-white/30 px-4 py-1.5 text-xs tracking-widest uppercase hover:bg-white/10 transition-all">
+              Apply
+            </button>
+          </form>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 justify-end">
+            <Link href={`${base}?from=${prevM.from}&to=${prevM.to}`} className={presetCls(false)}>◀ Prev</Link>
+            <Link href={`${base}?from=${thisM.from}&to=${thisM.to}`} className={presetCls(false)}>This Month</Link>
+            <Link href={`${base}?from=${nextM.from}&to=${nextM.to}`} className={presetCls(false)}>Next ▶</Link>
+            <span className="text-white/15">|</span>
+            <Link href={`${base}?from=${year}-01-01&to=${year}-12-31`} className={presetCls(yearActive)}>This Year</Link>
+            <Link href={`${base}?from=${year - 1}-01-01&to=${year - 1}-12-31`} className={presetCls(lastActive)}>Last Year</Link>
+            <Link href={`${base}?all=1`} className={presetCls(isAll)}>All</Link>
+          </div>
+        </div>
+
+        {/* Scheduled (forecast) — filtered to range */}
         {forecasts.length > 0 && (
           <div className="border border-dashed border-white/15 mb-8">
-            <div className="px-6 py-3 border-b border-white/10 text-xs tracking-widest uppercase text-amber-400/60">
-              Scheduled — upcoming ({forecasts.length})
+            <div className="px-6 py-3 border-b border-white/10 flex items-center justify-between">
+              <span className="text-xs tracking-widest uppercase text-amber-400/60">Scheduled · in range ({forecasts.length})</span>
+              <span className="text-xs tracking-widest uppercase text-white/40">
+                net <span className={schedNet >= 0 ? 'text-emerald-400/80' : 'text-amber-400'} style={{ fontFamily: 'Georgia, serif' }}>{fmt(schedNet)}</span>
+              </span>
             </div>
             {forecasts.map((t) => {
               const a = parseFloat(t.amount)
@@ -230,57 +281,41 @@ export default async function PropertyPage({
                     </div>
                   </div>
                   {editable && (
-                    <form action={markForecastPaid} className="flex items-center gap-2">
-                      <input type="hidden" name="property_id" value={prop.id} />
-                      <input type="hidden" name="id" value={t.id} />
-                      <input name="actual_amount" type="number" step="0.01" min="0.01" placeholder={a.toFixed(2)}
-                        className="w-24 bg-white/5 border border-white/20 px-2 py-1 text-white placeholder:text-white/30 text-xs focus:outline-none focus:border-white/50" />
-                      <input name="actual_date" type="date"
-                        className="bg-white/5 border border-white/20 px-2 py-1 text-white text-xs focus:outline-none focus:border-white/50" />
-                      <button type="submit" className="border border-emerald-400/30 text-emerald-400/80 px-3 py-1 text-xs tracking-widest uppercase hover:bg-emerald-400/10 transition-all whitespace-nowrap">
-                        Mark paid
-                      </button>
-                    </form>
+                    <div className="flex items-center gap-2">
+                      <form action={markForecastPaid} className="flex items-center gap-2">
+                        <input type="hidden" name="property_id" value={prop.id} />
+                        <input type="hidden" name="id" value={t.id} />
+                        <input name="actual_amount" type="number" step="0.01" min="0.01" placeholder={a.toFixed(2)}
+                          className="w-24 bg-white/5 border border-white/20 px-2 py-1 text-white placeholder:text-white/30 text-xs focus:outline-none focus:border-white/50" />
+                        <input name="actual_date" type="date"
+                          className="bg-white/5 border border-white/20 px-2 py-1 text-white text-xs focus:outline-none focus:border-white/50" />
+                        <button type="submit" className="border border-emerald-400/30 text-emerald-400/80 px-3 py-1 text-xs tracking-widest uppercase hover:bg-emerald-400/10 transition-all whitespace-nowrap">
+                          Mark paid
+                        </button>
+                      </form>
+                      <form action={deleteForecast}>
+                        <input type="hidden" name="property_id" value={prop.id} />
+                        <input type="hidden" name="id" value={t.id} />
+                        <button type="submit" className="text-xs text-white/20 hover:text-red-400 tracking-widest uppercase transition-colors">
+                          Remove
+                        </button>
+                      </form>
+                    </div>
                   )}
                 </div>
               )
             })}
             <div className="px-6 py-2 text-[11px] text-white/25">
-              Amounts marked “est” are estimates — correct the amount/date when you mark them paid. Leave blank to accept as-is.
+              “Mark paid” converts a scheduled item to an actual (correct the amount/date for estimates). “Remove”
+              skips this one occurrence — Regenerate will recreate it from the schedule; pause/edit the schedule to stop it for good.
             </div>
           </div>
         )}
 
-        {/* Ledger filter controls */}
-        <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
-          <form method="get" className="flex items-end gap-2">
-            <div>
-              <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">From</label>
-              <input name="from" type="date" defaultValue={isAll ? '' : fromDate}
-                className="bg-white/5 border border-white/20 px-3 py-1.5 text-white text-xs focus:outline-none focus:border-white/50" />
-            </div>
-            <div>
-              <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">To</label>
-              <input name="to" type="date" defaultValue={isAll ? '' : toDate}
-                className="bg-white/5 border border-white/20 px-3 py-1.5 text-white text-xs focus:outline-none focus:border-white/50" />
-            </div>
-            <button type="submit" className="border border-white/30 px-4 py-1.5 text-xs tracking-widest uppercase hover:bg-white/10 transition-all">
-              Apply
-            </button>
-          </form>
-          <div className="flex items-center gap-4">
-            <Link href={`/real-estate/${propertyId}?from=${year}-01-01&to=${year}-12-31`} className={presetCls(presetActive('year'))}>This Year</Link>
-            <Link href={`/real-estate/${propertyId}?from=${year - 1}-01-01&to=${year - 1}-12-31`} className={presetCls(presetActive('last'))}>Last Year</Link>
-            <Link href={`/real-estate/${propertyId}?all=1`} className={presetCls(presetActive('all'))}>All</Link>
-          </div>
-        </div>
-
-        {/* Actual ledger */}
+        {/* Actual ledger — filtered to range */}
         <div className="border border-white/10">
           <div className="px-6 py-3 border-b border-white/10 flex items-center justify-between">
-            <span className="text-xs tracking-widest uppercase text-white/40">
-              Ledger · actuals ({actuals.length})
-            </span>
+            <span className="text-xs tracking-widest uppercase text-white/40">Ledger · actuals ({actuals.length})</span>
             <span className="text-xs tracking-widest uppercase text-white/40">
               range net <span className={rangeNet >= 0 ? 'text-emerald-400' : 'text-amber-400'} style={{ fontFamily: 'Georgia, serif' }}>{fmt(rangeNet)}</span>
             </span>
