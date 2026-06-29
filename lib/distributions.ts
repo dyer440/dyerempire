@@ -1,49 +1,117 @@
-// app/real-estate/distributions/actions.ts  (NEW — record / clear a quarter's distribution)
-'use server'
-import sql from '@/lib/db'
-import { auth } from '@clerk/nextjs/server'
-import { revalidatePath } from 'next/cache'
-import { getUserRole, canEdit, canAccessProperty } from '@/lib/access'
-import { computeQuarter, isValidPeriod } from '@/lib/distributions'
+// lib/distributions.ts  (NEW — quarter P&L, reserve math, and ownership split)
+import sql from './db'
 
-async function guard(propertyId: number) {
-  const { sessionClaims } = await auth()
-  const email = (sessionClaims?.email as string) || ''
-  const role = await getUserRole(email)
-  if (!canEdit(role)) throw new Error('Not authorized')
-  if (!(await canAccessProperty(email, role, propertyId))) throw new Error('Not authorized')
-  return email
-}
+// Expense categories that are "reserved for" rather than distributed against.
+export const RESERVED_CATEGORIES = ['Property Taxes', 'Insurance'] as const
+const RESERVED_SET = new Set<string>(RESERVED_CATEGORIES)
 
-// Record the distribution for a quarter: recompute server-side, write one row per owner.
-export async function recordDistribution(formData: FormData) {
-  const propertyId = Number(formData.get('property_id'))
-  await guard(propertyId)
-  const period = String(formData.get('period') || '')
-  if (!isValidPeriod(period)) return
-
-  const c = await computeQuarter(propertyId, period)
-  if (c.distributable <= 0) return // nothing to distribute
-
-  // Replace any prior record for this period (idempotent)
-  await sql`DELETE FROM distributions WHERE property_id = ${propertyId} AND period = ${period}`
-  for (const s of c.split) {
-    await sql`
-      INSERT INTO distributions (period, property_id, owner_id, amount, status)
-      VALUES (${period}, ${propertyId}, ${s.owner_id}, ${s.amount}, 'recorded')
-    `
+export function quarterBounds(period: string) {
+  const [ys, qs] = period.split('-Q')
+  const y = Number(ys)
+  const q = Number(qs)
+  const starts = ['01-01', '04-01', '07-01', '10-01']
+  const ends = ['03-31', '06-30', '09-30', '12-31']
+  return {
+    y, q,
+    start: `${y}-${starts[q - 1]}`,
+    end: `${y}-${ends[q - 1]}`,
+    yearStart: `${y}-01-01`,
+    label: `${y}-Q${q}`,
   }
-  revalidatePath(`/real-estate/${propertyId}/periods/${period}`)
-  revalidatePath(`/real-estate/${propertyId}/periods`)
 }
 
-export async function clearDistribution(formData: FormData) {
-  const propertyId = Number(formData.get('property_id'))
-  await guard(propertyId)
-  const period = String(formData.get('period') || '')
-  if (!isValidPeriod(period)) return
+export function isValidPeriod(period: string): boolean {
+  return /^\d{4}-Q[1-4]$/.test(period)
+}
 
-  await sql`DELETE FROM distributions WHERE property_id = ${propertyId} AND period = ${period}`
-  revalidatePath(`/real-estate/${propertyId}/periods/${period}`)
-  revalidatePath(`/real-estate/${propertyId}/periods`)
+function perYear(frequency: string, monthsCsv: string | null): number {
+  if (monthsCsv && monthsCsv.trim()) return monthsCsv.split(',').filter((x) => x.trim()).length
+  return ({ monthly: 12, quarterly: 4, semiannual: 2, annual: 1 } as Record<string, number>)[frequency] ?? 1
+}
+
+// Annual reserve target = sum of annualized tax + insurance estimate schedules.
+export async function reserveTargetAnnual(propertyId: number): Promise<number> {
+  const rows = (await sql`
+    SELECT amount, frequency, months_csv
+    FROM recurring_schedules
+    WHERE property_id = ${propertyId} AND status = 'active'
+      AND category IN ('Property Taxes', 'Insurance')
+  `) as { amount: string; frequency: string; months_csv: string | null }[]
+  let total = 0
+  for (const r of rows) total += parseFloat(r.amount) * perYear(r.frequency, r.months_csv)
+  return total
+}
+
+export type OwnerSplit = { owner_id: number; name: string; pct: number; amount: number }
+
+export type QuarterComputation = {
+  label: string; start: string; end: string; q: number
+  income: number; opExpense: number; reservedExpense: number
+  operatingNet: number; allInNet: number
+  annualReserve: number; reserveTargetQuarter: number
+  distributable: number
+  reservedPaidYtd: number; reserveAccrued: number; reserveBalance: number
+  split: OwnerSplit[]
+}
+
+export async function computeQuarter(propertyId: number, period: string): Promise<QuarterComputation> {
+  const { q, start, end, yearStart, label } = quarterBounds(period)
+
+  // Quarter actuals grouped by type/category
+  const rows = (await sql`
+    SELECT type, category, COALESCE(SUM(amount), 0)::float8 AS total
+    FROM transactions
+    WHERE property_id = ${propertyId} AND status = 'actual'
+      AND txn_date BETWEEN ${start} AND ${end}
+    GROUP BY type, category
+  `) as { type: string; category: string; total: number }[]
+
+  let income = 0, opExpense = 0, reservedExpense = 0
+  for (const r of rows) {
+    if (r.type === 'income') income += r.total
+    else if (RESERVED_SET.has(r.category)) reservedExpense += r.total
+    else opExpense += r.total
+  }
+
+  const operatingNet = income - opExpense
+  const allInNet = income - opExpense - reservedExpense
+
+  const annualReserve = await reserveTargetAnnual(propertyId)
+  const reserveTargetQuarter = annualReserve / 4
+  const distributable = operatingNet - reserveTargetQuarter
+
+  // Reserve balance: accrued this year through this quarter − reserved expenses paid YTD through quarter end
+  const paidRows = (await sql`
+    SELECT COALESCE(SUM(amount), 0)::float8 AS total
+    FROM transactions
+    WHERE property_id = ${propertyId} AND status = 'actual'
+      AND category IN ('Property Taxes', 'Insurance')
+      AND txn_date BETWEEN ${yearStart} AND ${end}
+  `) as { total: number }[]
+  const reservedPaidYtd = paidRows[0]?.total || 0
+  const reserveAccrued = q * reserveTargetQuarter
+  const reserveBalance = reserveAccrued - reservedPaidYtd
+
+  // Ownership split applied to distributable (only when positive)
+  const owners = (await sql`
+    SELECT o.id AS owner_id, o.name, po.ownership_pct
+    FROM property_owners po JOIN owners o ON o.id = po.owner_id
+    WHERE po.property_id = ${propertyId}
+    ORDER BY po.ownership_pct DESC
+  `) as { owner_id: number; name: string; ownership_pct: string }[]
+
+  const split: OwnerSplit[] = owners.map((o) => {
+    const pct = parseFloat(o.ownership_pct)
+    return { owner_id: o.owner_id, name: o.name, pct, amount: distributable > 0 ? (distributable * pct) / 100 : 0 }
+  })
+
+  return {
+    label, start, end, q,
+    income, opExpense, reservedExpense,
+    operatingNet, allInNet,
+    annualReserve, reserveTargetQuarter,
+    distributable,
+    reservedPaidYtd, reserveAccrued, reserveBalance,
+    split,
+  }
 }
