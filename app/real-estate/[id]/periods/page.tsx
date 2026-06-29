@@ -75,9 +75,14 @@ export default async function PeriodsPage({ params }: { params: Promise<{ id: st
             </h1>
             <p className="text-white/30 text-xs tracking-widest uppercase mt-1">{prop[0].name} · quarters</p>
           </div>
-          <Link href={`/real-estate/${propertyId}`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
-            ← Property
-          </Link>
+          <div className="flex flex-col items-end gap-2">
+            <Link href={`/real-estate/${propertyId}`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
+              ← Property
+            </Link>
+            <Link href={`/real-estate/${propertyId}/capital`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
+              Capital →
+            </Link>
+          </div>
         </div>
 
         <p className="text-[11px] text-white/30 mb-6 max-w-xl">
