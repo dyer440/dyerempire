@@ -6,6 +6,7 @@ import sql from '@/lib/db'
 import { initDb } from '@/lib/init-db'
 import { getUserRole, canAccessProperty } from '@/lib/access'
 import { computeCapitalAccounts, type OwnerYear } from '@/lib/capital'
+import { computePayback } from '@/lib/payback'
 
 const fmt = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
@@ -75,6 +76,7 @@ export default async function CapitalPage({ params }: { params: Promise<{ id: st
   if (prop.length === 0) redirect('/real-estate')
 
   const ca = await computeCapitalAccounts(propertyId)
+  const pb = await computePayback(propertyId)
 
   return (
     <main className="min-h-screen bg-black text-white p-6 md:p-10">
@@ -95,6 +97,42 @@ export default async function CapitalPage({ params }: { params: Promise<{ id: st
           Member capital on two bases. <span className="text-white/50">Real</span> tracks cash equity; <span className="text-white/50">Paper</span>
           {' '}reflects income after depreciation (the K-1 basis). Each year: Beginning + Contributions + Net Income (allocated by ownership %) − Distributions = Ending.
         </p>
+
+        {/* Capital payback / return-of-capital */}
+        {pb.contributed > 0 && (
+          <div className="border border-white/10 p-5 mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-white/30 text-xs tracking-widest uppercase">Capital Returned</div>
+              {pb.flipEnabled && (
+                <div className="text-[10px] tracking-widest uppercase text-amber-400/60">
+                  {pb.reached ? `50/50 split active (paid back ${pb.reachedPeriod ?? ''})` : '→ flips to 50/50 at full payback'}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-white/60">{fmt(pb.distributed)} returned of {fmt(pb.contributed)} contributed</span>
+              <span className="text-white/80" style={{ fontFamily: 'Georgia, serif' }}>{pb.pctReturned.toFixed(1)}%</span>
+            </div>
+            <div className="h-1 bg-white/10 w-full mb-3">
+              <div className="h-1 bg-emerald-400 transition-all" style={{ width: `${pb.pctReturned}%` }} />
+            </div>
+            <div className="flex justify-between text-xs text-white/40">
+              <span>Remaining to payback</span>
+              <span style={{ fontFamily: 'Georgia, serif' }}>{fmt(pb.remaining)}</span>
+            </div>
+            <div className="mt-3 space-y-1">
+              {pb.owners.map((o) => (
+                <div key={o.owner_id} className="flex justify-between text-xs text-white/50">
+                  <span>{o.name}</span>
+                  <span style={{ fontFamily: 'Georgia, serif' }}>{fmt(o.distributed)} / {fmt(o.contributed)}</span>
+                </div>
+              ))}
+            </div>
+            {!pb.reached && (
+              <p className="text-[11px] text-white/25 mt-3">Projected payback date comes with the IRR forecast (next build).</p>
+            )}
+          </div>
+        )}
 
         {ca.years.map((y) => (
           <div key={y.year} className="border border-white/10 p-5 mb-5">
