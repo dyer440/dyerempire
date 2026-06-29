@@ -31,3 +31,65 @@ select optgroup {
   background-color: #0a0a0a;
   color: #ffffff;
 }
+
+
+/* ============================================================================
+   APPEND to app/globals.css — scoped light theme for the Real Estate section.
+   Activated by the .re-light class on the real-estate layout + property-list page.
+   Leaves the homepage, Thomas's Car, and Admin on the dark theme untouched.
+   ============================================================================ */
+.re-light { background-color: #ffffff; color: #111111; }
+
+/* backgrounds */
+.re-light .bg-black,  .re-light.bg-black  { background-color: #ffffff; }
+.re-light .bg-black\/90, .re-light.bg-black\/90 { background-color: rgba(255,255,255,0.9); }
+.re-light .bg-black\/40 { background-color: rgba(0,0,0,0.04); }
+.re-light .bg-white\/10 { background-color: rgba(0,0,0,0.06); }
+.re-light .bg-white\/5  { background-color: rgba(0,0,0,0.04); }
+
+/* text — white tiers mapped to dark tiers (muted ones kept readable on purpose) */
+.re-light .text-white     { color: #111111; }
+.re-light .text-white\/90 { color: rgba(0,0,0,0.88); }
+.re-light .text-white\/80 { color: rgba(0,0,0,0.80); }
+.re-light .text-white\/70 { color: rgba(0,0,0,0.72); }
+.re-light .text-white\/60 { color: rgba(0,0,0,0.64); }
+.re-light .text-white\/50 { color: rgba(0,0,0,0.58); }
+.re-light .text-white\/40 { color: rgba(0,0,0,0.52); }
+.re-light .text-white\/30 { color: rgba(0,0,0,0.48); }
+.re-light .text-white\/25 { color: rgba(0,0,0,0.46); }
+.re-light .text-white\/20 { color: rgba(0,0,0,0.44); }
+.re-light .text-white\/15 { color: rgba(0,0,0,0.42); }
+
+/* accent text — darkened for contrast on white */
+.re-light .text-emerald-400,
+.re-light .text-emerald-400\/80,
+.re-light .text-emerald-400\/70,
+.re-light .text-emerald-400\/60 { color: #047857; }
+.re-light .text-amber-400,
+.re-light .text-amber-400\/80,
+.re-light .text-amber-400\/70,
+.re-light .text-amber-400\/60 { color: #b45309; }
+.re-light .text-red-400,
+.re-light .text-red-400\/70 { color: #dc2626; }
+
+/* borders */
+.re-light .border-white\/5  { border-color: rgba(0,0,0,0.08); }
+.re-light .border-white\/10 { border-color: rgba(0,0,0,0.12); }
+.re-light .border-white\/15 { border-color: rgba(0,0,0,0.15); }
+.re-light .border-white\/20 { border-color: rgba(0,0,0,0.18); }
+.re-light .border-white\/30 { border-color: rgba(0,0,0,0.24); }
+.re-light .border-white\/50 { border-color: rgba(0,0,0,0.30); }
+.re-light .border-white\/60 { border-color: rgba(0,0,0,0.34); }
+.re-light .border-white\/80 { border-color: rgba(0,0,0,0.44); }
+
+/* hover states */
+.re-light .hover\:text-white:hover   { color: #000000; }
+.re-light .hover\:text-black:hover   { color: #ffffff; }
+.re-light .hover\:bg-white:hover     { background-color: #111111; }
+.re-light .hover\:bg-white\/10:hover { background-color: rgba(0,0,0,0.06); }
+.re-light .hover\:bg-white\/5:hover  { background-color: rgba(0,0,0,0.04); }
+
+/* dropdown options on the light theme (overrides the earlier dark rule inside .re-light) */
+.re-light select option, .re-light select optgroup { background-color: #ffffff; color: #111111; }
+
+/* emerald progress fills (bg-emerald-400) are left as-is — they read fine on white */
