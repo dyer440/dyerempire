@@ -1,7 +1,8 @@
-// lib/capital.ts  (NEW — member capital accounts: Real & Paper, per owner per year)
-// Net income is allocated by the PRECISE contribution ratio (not the rounded
-// ownership %), which reproduces filed figures to the penny. Falls back to the
-// stored ownership_pct for properties without recorded contributions.
+// lib/capital.ts  (v3 — per-year allocation ratio so mid-life contributions re-strike ownership)
+// Net income for year Y is allocated by each owner's CUMULATIVE contribution ratio
+// through the end of Y. For a property whose contributions all land in one year
+// (e.g. 500 West) the ratio is constant; for one with later contributions (e.g. 1219)
+// the split shifts the year the new capital goes in — matching the filed sheets.
 import sql from './db'
 
 export type OwnerYear = {
@@ -11,7 +12,7 @@ export type CapitalRow = {
   owner_id: number; name: string; pct: number
   real: OwnerYear; paper: OwnerYear
 }
-export type CapitalYear = { year: number; rows: CapitalRow[] }
+export type CapitalYear = { year: number; rows: CapitalRow[]; ratioPct: Record<number, number> }
 export type CapitalAccounts = {
   years: CapitalYear[]
   owners: { owner_id: number; name: string; pct: number }[]
@@ -32,17 +33,7 @@ export async function computeCapitalAccounts(propertyId: number): Promise<Capita
     GROUP BY owner_id, yr
   `) as { owner_id: number; yr: number; total: number }[]
   const contrib: Record<string, number> = {}
-  const contribTotalByOwner: Record<number, number> = {}
-  let contribGrand = 0
-  for (const r of contribRows) {
-    contrib[`${r.owner_id}:${r.yr}`] = r.total
-    contribTotalByOwner[r.owner_id] = (contribTotalByOwner[r.owner_id] || 0) + r.total
-    contribGrand += r.total
-  }
-
-  // Precise allocation fraction: contribution ratio if contributions exist, else ownership %.
-  const allocFraction = (ownerId: number, pct: number) =>
-    contribGrand > 0 && contribTotalByOwner[ownerId] ? contribTotalByOwner[ownerId] / contribGrand : pct / 100
+  for (const r of contribRows) contrib[`${r.owner_id}:${r.yr}`] = r.total
 
   const distRows = (await sql`
     SELECT owner_id, LEFT(period, 4) AS yr, COALESCE(SUM(amount), 0)::float8 AS total
@@ -75,13 +66,23 @@ export async function computeCapitalAccounts(propertyId: number): Promise<Capita
 
   const prevReal: Record<number, number> = {}
   const prevPaper: Record<number, number> = {}
+  const cumContrib: Record<number, number> = {} // running cumulative contributions per owner
   const years: CapitalYear[] = []
 
   for (let y = earliest; y <= current; y++) {
+    // Roll cumulative contributions forward to include this year's
+    for (const o of ownerList) cumContrib[o.owner_id] = (cumContrib[o.owner_id] || 0) + (contrib[`${o.owner_id}:${y}`] || 0)
+    const totalCum = ownerList.reduce((s, o) => s + (cumContrib[o.owner_id] || 0), 0)
+    const fracFor = (o: { owner_id: number; pct: number }) =>
+      totalCum > 0 ? (cumContrib[o.owner_id] || 0) / totalCum : o.pct / 100
+
     const rNI = realNI[y] || 0
     const pNI = rNI - (dep[y] || 0)
+    const ratioPct: Record<number, number> = {}
+
     const rows: CapitalRow[] = ownerList.map((o) => {
-      const f = allocFraction(o.owner_id, o.pct)
+      const f = fracFor(o)
+      ratioPct[o.owner_id] = f * 100
       const c = contrib[`${o.owner_id}:${y}`] || 0
       const d = dist[`${o.owner_id}:${y}`] || 0
       const rBeg = prevReal[o.owner_id] || 0
@@ -96,7 +97,7 @@ export async function computeCapitalAccounts(propertyId: number): Promise<Capita
         paper: { beginning: pBeg, contributions: c, netIncome: pNI * f, distributions: d, ending: pEnd },
       }
     })
-    years.push({ year: y, rows })
+    years.push({ year: y, rows, ratioPct })
   }
 
   return { years, owners: ownerList }
