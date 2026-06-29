@@ -1,4 +1,4 @@
-// app/real-estate/[id]/schedules/page.tsx  (NEW — manage recurring schedules)
+// app/real-estate/[id]/schedules/page.tsx  (UPDATED — adds "Periods →" link in header)
 import { auth } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
@@ -52,15 +52,20 @@ export default async function SchedulesPage({ params }: { params: Promise<{ id: 
             </h1>
             <p className="text-white/30 text-xs tracking-widest uppercase mt-1">{prop[0].name} · recurring items</p>
           </div>
-          <Link href={`/real-estate/${propertyId}`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
-            ← Property
-          </Link>
+          <div className="flex flex-col items-end gap-2">
+            <Link href={`/real-estate/${propertyId}`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
+              ← Property
+            </Link>
+            <Link href={`/real-estate/${propertyId}/periods`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
+              Periods →
+            </Link>
+          </div>
         </div>
 
         {/* Regenerate */}
         <form action={regenerateForecasts} className="flex items-center justify-between border border-white/10 p-4 mb-8">
           <div className="text-xs text-white/50">
-            {forecastCount[0]?.n ?? 0} forecast rows projected ahead (12-month horizon).
+            {forecastCount[0]?.n ?? 0} forecast rows projected ahead (12-month horizon, excluding closed quarters).
           </div>
           <input type="hidden" name="property_id" value={propertyId} />
           <button type="submit" className="border border-white/30 px-5 py-2 text-xs tracking-widest uppercase hover:bg-white/10 transition-all">
