@@ -1,4 +1,4 @@
-// app/real-estate/distributions/actions.ts  (UPDATED — record accepts an override total)
+// app/real-estate/distributions/actions.ts  (UPDATED — allow an explicit $0 distribution)
 'use server'
 import sql from '@/lib/db'
 import { auth } from '@clerk/nextjs/server'
@@ -16,8 +16,10 @@ async function guard(propertyId: number) {
 }
 
 // Record the distribution for a quarter. Splits a TOTAL across owners by ownership %.
-// The total defaults to the app's smoothed distributable, but an override may be passed
-// (e.g. to match an actual historical distribution that used a different holdback).
+// - If the amount field is left BLANK, defaults to the smoothed distributable and
+//   only records when that is positive.
+// - If the amount field is filled (including an explicit 0), that value is recorded
+//   as-is — so a "$0 distributed this quarter" can be logged. Negatives are ignored.
 export async function recordDistribution(formData: FormData) {
   const propertyId = Number(formData.get('property_id'))
   await guard(propertyId)
@@ -25,9 +27,16 @@ export async function recordDistribution(formData: FormData) {
   if (!isValidPeriod(period)) return
 
   const c = await computeQuarter(propertyId, period)
-  const overrideRaw = String(formData.get('amount') || '')
-  const total = overrideRaw ? parseFloat(overrideRaw) : c.distributable
-  if (!total || total <= 0) return
+  const overrideRaw = String(formData.get('amount') || '').trim()
+
+  let total: number
+  if (overrideRaw !== '') {
+    total = parseFloat(overrideRaw)
+    if (isNaN(total) || total < 0) return // explicit value: allow 0, reject negatives/garbage
+  } else {
+    total = c.distributable
+    if (total <= 0) return // blank field: only auto-record a positive distributable
+  }
 
   // Replace any prior record for this period (idempotent)
   await sql`DELETE FROM distributions WHERE property_id = ${propertyId} AND period = ${period}`
