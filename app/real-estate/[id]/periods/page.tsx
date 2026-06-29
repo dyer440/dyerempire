@@ -1,13 +1,10 @@
-// app/real-estate/[id]/periods/page.tsx  (NEW — close/reopen calendar quarters)
+// app/real-estate/[id]/periods/page.tsx  (UPDATED — quarters link to detail; close/distribute live there)
 import { auth } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import sql from '@/lib/db'
 import { initDb } from '@/lib/init-db'
 import { getUserRole, canAccessProperty, canEdit } from '@/lib/access'
-import { closePeriod, reopenPeriod } from '../../recurring/actions'
-
-const pad = (n: number) => String(n).padStart(2, '0')
 
 function quartersFor(years: number[]) {
   const out: { label: string; y: number; q: number; start: string; end: string }[] = []
@@ -38,11 +35,9 @@ export default async function PeriodsPage({ params }: { params: Promise<{ id: st
   if (prop.length === 0) redirect('/real-estate')
 
   const thisYear = new Date().getFullYear()
-  const years = [thisYear, thisYear - 1]
-  const quarters = quartersFor(years)
-
-  // Actual net per quarter (for context)
+  const quarters = quartersFor([thisYear, thisYear - 1])
   const startBound = `${thisYear - 1}-01-01`
+
   const sums = (await sql`
     SELECT EXTRACT(YEAR FROM txn_date)::int AS y, EXTRACT(QUARTER FROM txn_date)::int AS q,
            type, COALESCE(SUM(amount), 0)::float8 AS total
@@ -56,18 +51,13 @@ export default async function PeriodsPage({ params }: { params: Promise<{ id: st
     net[k] = (net[k] || 0) + (s.type === 'income' ? s.total : -s.total)
   }
 
-  // Forecast count per quarter (what's still scheduled/unconfirmed there)
-  const fc = (await sql`
-    SELECT EXTRACT(YEAR FROM txn_date)::int AS y, EXTRACT(QUARTER FROM txn_date)::int AS q, COUNT(*)::int AS n
-    FROM transactions
-    WHERE property_id = ${propertyId} AND status = 'forecast' AND txn_date >= ${startBound}
-    GROUP BY y, q
-  `) as { y: number; q: number; n: number }[]
-  const fcount: Record<string, number> = {}
-  for (const r of fc) fcount[`${r.y}-Q${r.q}`] = r.n
-
   const closed = (await sql`SELECT label FROM period_closes WHERE property_id = ${propertyId}`) as { label: string }[]
   const closedSet = new Set(closed.map((c) => c.label))
+
+  const dist = (await sql`
+    SELECT period, COUNT(*)::int AS n FROM distributions WHERE property_id = ${propertyId} GROUP BY period
+  `) as { period: string; n: number }[]
+  const distSet = new Set(dist.map((d) => d.period))
 
   return (
     <main className="min-h-screen bg-black text-white p-6 md:p-10">
@@ -77,7 +67,7 @@ export default async function PeriodsPage({ params }: { params: Promise<{ id: st
             <h1 className="text-2xl tracking-[0.3em] uppercase" style={{ fontFamily: 'Georgia, serif', fontWeight: 300 }}>
               Periods
             </h1>
-            <p className="text-white/30 text-xs tracking-widest uppercase mt-1">{prop[0].name} · quarter close</p>
+            <p className="text-white/30 text-xs tracking-widest uppercase mt-1">{prop[0].name} · quarters</p>
           </div>
           <Link href={`/real-estate/${propertyId}`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
             ← Property
@@ -85,20 +75,24 @@ export default async function PeriodsPage({ params }: { params: Promise<{ id: st
         </div>
 
         <p className="text-[11px] text-white/30 mb-6 max-w-xl">
-          Closing a quarter clears any unconfirmed scheduled items in it and stops the scheduler from
-          regenerating forecasts there — a closed quarter holds only actuals. Reopen to unlock.
+          Open a quarter to see its P&amp;L, the tax/insurance reserve, the distributable split by ownership, and to
+          record the distribution or close the quarter. Closing stops the scheduler from regenerating forecasts there.
         </p>
 
         <div className="border border-white/10">
           <div className="grid grid-cols-[1fr_auto_auto_auto] gap-4 px-6 py-3 border-b border-white/10 text-[10px] tracking-widest uppercase text-white/40">
-            <span>Quarter</span><span className="text-right">Actual net</span><span className="text-right">Scheduled</span><span className="text-right">Status</span>
+            <span>Quarter</span><span className="text-right">Actual net</span><span className="text-right">State</span><span className="text-right"></span>
           </div>
           {quarters.map((qt) => {
             const isClosed = closedSet.has(qt.label)
+            const isDist = distSet.has(qt.label)
             const n = net[qt.label] || 0
-            const sched = fcount[qt.label] || 0
             return (
-              <div key={qt.label} className="grid grid-cols-[1fr_auto_auto_auto] gap-4 items-center px-6 py-4 border-b border-white/5">
+              <Link
+                key={qt.label}
+                href={`/real-estate/${propertyId}/periods/${qt.label}`}
+                className="grid grid-cols-[1fr_auto_auto_auto] gap-4 items-center px-6 py-4 border-b border-white/5 hover:bg-white/5 transition-colors"
+              >
                 <div>
                   <div className="text-sm text-white/80" style={{ fontFamily: 'Georgia, serif' }}>{qt.label}</div>
                   <div className="text-[11px] text-white/30">{qt.start} → {qt.end}</div>
@@ -106,30 +100,12 @@ export default async function PeriodsPage({ params }: { params: Promise<{ id: st
                 <div className={`text-right text-sm ${n >= 0 ? 'text-emerald-400' : 'text-amber-400'}`} style={{ fontFamily: 'Georgia, serif' }}>
                   ${n.toFixed(2)}
                 </div>
-                <div className="text-right text-xs text-white/40">{sched ? `${sched} open` : '—'}</div>
-                <div className="text-right">
-                  {isClosed ? (
-                    <form action={reopenPeriod} className="inline">
-                      <input type="hidden" name="property_id" value={propertyId} />
-                      <input type="hidden" name="label" value={qt.label} />
-                      <span className="text-amber-400/70 text-xs tracking-widest uppercase mr-3">🔒 Closed</span>
-                      <button type="submit" className="text-xs text-white/30 hover:text-white tracking-widest uppercase transition-colors">
-                        Reopen
-                      </button>
-                    </form>
-                  ) : (
-                    <form action={closePeriod} className="inline">
-                      <input type="hidden" name="property_id" value={propertyId} />
-                      <input type="hidden" name="label" value={qt.label} />
-                      <input type="hidden" name="period_start" value={qt.start} />
-                      <input type="hidden" name="period_end" value={qt.end} />
-                      <button type="submit" className="border border-white/30 px-4 py-1 text-xs tracking-widest uppercase hover:bg-white/10 transition-all">
-                        Close
-                      </button>
-                    </form>
-                  )}
+                <div className="text-right text-xs tracking-widest uppercase">
+                  {isClosed ? <span className="text-amber-400/70">🔒 closed</span> : <span className="text-white/30">open</span>}
+                  {isDist ? <span className="text-emerald-400/60 ml-2">dist’d</span> : null}
                 </div>
-              </div>
+                <div className="text-right text-white/30 text-xs tracking-widest uppercase">Open →</div>
+              </Link>
             )
           })}
         </div>
