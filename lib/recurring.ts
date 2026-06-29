@@ -1,11 +1,10 @@
-// lib/recurring.ts  (NEW — forecast generator for recurring schedules)
+// lib/recurring.ts  (UPDATED — generator skips closed periods)
 import sql from './db'
 
 export type Frequency = 'monthly' | 'quarterly' | 'semiannual' | 'annual'
 
 export const FREQUENCIES: Frequency[] = ['monthly', 'quarterly', 'semiannual', 'annual']
 
-// Default month sets per frequency when months_csv is blank.
 const DEFAULT_MONTHS: Record<Frequency, number[]> = {
   monthly: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
   quarterly: [1, 4, 7, 10],
@@ -13,7 +12,6 @@ const DEFAULT_MONTHS: Record<Frequency, number[]> = {
   annual: [1],
 }
 
-// How far ahead to project forecasts.
 const HORIZON_MONTHS = 12
 
 type ScheduleRow = {
@@ -35,10 +33,7 @@ type ScheduleRow = {
 
 function monthsFor(s: ScheduleRow): number[] {
   if (s.months_csv && s.months_csv.trim()) {
-    return s.months_csv
-      .split(',')
-      .map((x) => parseInt(x.trim(), 10))
-      .filter((n) => n >= 1 && n <= 12)
+    return s.months_csv.split(',').map((x) => parseInt(x.trim(), 10)).filter((n) => n >= 1 && n <= 12)
   }
   return DEFAULT_MONTHS[s.frequency] || []
 }
@@ -49,17 +44,31 @@ function pad(n: number): string {
 
 /**
  * Regenerate forward forecast transactions for a property.
- * - Deletes existing forecast rows dated on/after the first of the current month
- *   (idempotent regeneration). NEVER touches status='actual' rows.
- * - Re-creates forecasts for every active schedule across the horizon.
+ * - Deletes future forecasts EXCEPT those inside a closed period.
+ * - Re-creates forecasts for every active schedule across the horizon,
+ *   skipping any date that falls inside a closed period.
+ * - NEVER touches status='actual' rows.
  */
 export async function generateForecasts(propertyId: number): Promise<number> {
+  // Wipe future forecasts, but leave closed periods alone.
   await sql`
     DELETE FROM transactions
     WHERE property_id = ${propertyId}
       AND status = 'forecast'
       AND txn_date >= date_trunc('month', CURRENT_DATE)
+      AND NOT EXISTS (
+        SELECT 1 FROM period_closes pc
+        WHERE pc.property_id = ${propertyId}
+          AND transactions.txn_date BETWEEN pc.period_start AND pc.period_end
+      )
   `
+
+  // Closed ranges (as YYYY-MM-DD strings for safe string comparison).
+  const closes = (await sql`
+    SELECT to_char(period_start, 'YYYY-MM-DD') AS ps, to_char(period_end, 'YYYY-MM-DD') AS pe
+    FROM period_closes WHERE property_id = ${propertyId}
+  `) as { ps: string; pe: string }[]
+  const isClosed = (d: string) => closes.some((c) => d >= c.ps && d <= c.pe)
 
   const schedules = (await sql`
     SELECT * FROM recurring_schedules
@@ -68,7 +77,7 @@ export async function generateForecasts(propertyId: number): Promise<number> {
 
   const today = new Date()
   const startYear = today.getFullYear()
-  const startMonthIdx = today.getMonth() // 0-indexed
+  const startMonthIdx = today.getMonth()
   const firstOfMonth = `${startYear}-${pad(startMonthIdx + 1)}-01`
 
   let created = 0
@@ -81,13 +90,14 @@ export async function generateForecasts(propertyId: number): Promise<number> {
 
     for (let i = 0; i < HORIZON_MONTHS; i++) {
       const y = startYear + Math.floor((startMonthIdx + i) / 12)
-      const m = ((startMonthIdx + i) % 12) + 1 // 1-indexed
+      const m = ((startMonthIdx + i) % 12) + 1
       if (!months.includes(m)) continue
 
       const dateStr = `${y}-${pad(m)}-${pad(day)}`
       if (dateStr < firstOfMonth) continue
       if (s.start_date && dateStr < s.start_date) continue
       if (s.end_date && dateStr > s.end_date) continue
+      if (isClosed(dateStr)) continue
 
       await sql`
         INSERT INTO transactions
