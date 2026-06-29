@@ -1,24 +1,19 @@
-// app/real-estate/[id]/periods/[period]/page.tsx  (UPDATED — editable distribution total on Record)
+// app/real-estate/[id]/periods/page.tsx  (UPDATED — quarter range starts at the property's first transaction)
 import { auth } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import sql from '@/lib/db'
 import { initDb } from '@/lib/init-db'
 import { getUserRole, canAccessProperty, canEdit } from '@/lib/access'
-import { computeQuarter, quarterBounds, isValidPeriod } from '@/lib/distributions'
-import { closePeriod, reopenPeriod } from '../../../recurring/actions'
-import { recordDistribution, clearDistribution } from '../../../distributions/actions'
 
-export default async function PeriodDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string; period: string }>
-}) {
+const STARTS = ['01-01', '04-01', '07-01', '10-01']
+const ENDS = ['03-31', '06-30', '09-30', '12-31']
+
+export default async function PeriodsPage({ params }: { params: Promise<{ id: string }> }) {
   await auth.protect()
   await initDb()
-  const { id, period } = await params
+  const { id } = await params
   const propertyId = Number(id)
-  if (!isValidPeriod(period)) redirect(`/real-estate/${propertyId}/periods`)
 
   const { sessionClaims } = await auth()
   const email = (sessionClaims?.email as string) || ''
@@ -26,165 +21,100 @@ export default async function PeriodDetailPage({
   if (!(await canAccessProperty(email, role, propertyId))) redirect('/real-estate')
   if (!canEdit(role)) redirect(`/real-estate/${propertyId}`)
 
-  const prop = (await sql`SELECT id, name, holding_entity FROM properties WHERE id = ${propertyId} LIMIT 1`) as
-    { id: number; name: string; holding_entity: string }[]
+  const prop = (await sql`SELECT id, name FROM properties WHERE id = ${propertyId} LIMIT 1`) as
+    { id: number; name: string }[]
   if (prop.length === 0) redirect('/real-estate')
 
-  const c = await computeQuarter(propertyId, period)
-  const { start, end, label } = quarterBounds(period)
+  const thisYear = new Date().getFullYear()
 
-  const closedRow = (await sql`SELECT label FROM period_closes WHERE property_id = ${propertyId} AND label = ${period}`) as { label: string }[]
-  const isClosed = closedRow.length > 0
+  // Earliest actual transaction → first quarter to show
+  const firstRow = (await sql`
+    SELECT to_char(MIN(txn_date), 'YYYY-MM-DD') AS first
+    FROM transactions WHERE property_id = ${propertyId} AND status = 'actual'
+  `) as { first: string | null }[]
+  const first = firstRow[0]?.first
+  const earliestYear = first ? Number(first.slice(0, 4)) : thisYear
+  const earliestMonth = first ? Number(first.slice(5, 7)) : 1
+  const earliestQuarter = Math.floor((earliestMonth - 1) / 3) + 1
 
-  const recorded = (await sql`
-    SELECT d.amount, d.owner_id, o.name FROM distributions d JOIN owners o ON o.id = d.owner_id
-    WHERE d.property_id = ${propertyId} AND d.period = ${period}
-    ORDER BY d.amount DESC
-  `) as { amount: string; owner_id: number; name: string }[]
-  const isRecorded = recorded.length > 0
-  const recordedTotal = recorded.reduce((s, r) => s + parseFloat(r.amount), 0)
+  // Build quarters from earliest (inclusive) through current year, most-recent-first
+  const quarters: { label: string; y: number; q: number; start: string; end: string }[] = []
+  for (let y = thisYear; y >= earliestYear; y--) {
+    for (let q = 4; q >= 1; q--) {
+      if (y === earliestYear && q < earliestQuarter) continue
+      quarters.push({ label: `${y}-Q${q}`, y, q, start: `${y}-${STARTS[q - 1]}`, end: `${y}-${ENDS[q - 1]}` })
+    }
+  }
 
-  const fmt = (n: number) => `$${n.toFixed(2)}`
-  const Row = ({ label: l, value, tone, dim }: { label: string; value: string; tone?: string; dim?: boolean }) => (
-    <div className={`flex justify-between py-2 text-sm ${dim ? 'text-white/40' : 'text-white/70'}`}>
-      <span>{l}</span>
-      <span className={tone} style={{ fontFamily: 'Georgia, serif' }}>{value}</span>
-    </div>
-  )
+  const startBound = `${earliestYear}-01-01`
+  const sums = (await sql`
+    SELECT EXTRACT(YEAR FROM txn_date)::int AS y, EXTRACT(QUARTER FROM txn_date)::int AS q,
+           type, COALESCE(SUM(amount), 0)::float8 AS total
+    FROM transactions
+    WHERE property_id = ${propertyId} AND status = 'actual' AND txn_date >= ${startBound}
+    GROUP BY y, q, type
+  `) as { y: number; q: number; type: string; total: number }[]
+  const net: Record<string, number> = {}
+  for (const s of sums) {
+    const k = `${s.y}-Q${s.q}`
+    net[k] = (net[k] || 0) + (s.type === 'income' ? s.total : -s.total)
+  }
+
+  const closed = (await sql`SELECT label FROM period_closes WHERE property_id = ${propertyId}`) as { label: string }[]
+  const closedSet = new Set(closed.map((c) => c.label))
+  const dist = (await sql`SELECT DISTINCT period FROM distributions WHERE property_id = ${propertyId}`) as { period: string }[]
+  const distSet = new Set(dist.map((d) => d.period))
 
   return (
     <main className="min-h-screen bg-black text-white p-6 md:p-10">
-      <div className="max-w-2xl mx-auto">
+      <div className="max-w-3xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-2xl tracking-[0.3em] uppercase" style={{ fontFamily: 'Georgia, serif', fontWeight: 300 }}>
-              {label}
+              Periods
             </h1>
-            <p className="text-white/30 text-xs tracking-widest uppercase mt-1">
-              {prop[0].name} · {prop[0].holding_entity}
-            </p>
-            <p className="text-white/40 text-xs mt-1">{start} → {end}{isClosed ? ' · 🔒 closed' : ''}</p>
+            <p className="text-white/30 text-xs tracking-widest uppercase mt-1">{prop[0].name} · quarters</p>
           </div>
-          <Link href={`/real-estate/${propertyId}/periods`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
-            ← Periods
+          <Link href={`/real-estate/${propertyId}`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
+            ← Property
           </Link>
         </div>
 
-        {/* P&L */}
-        <div className="border border-white/10 p-6 mb-6">
-          <div className="text-white/30 text-xs tracking-widest uppercase mb-3">Quarter P&amp;L (actuals)</div>
-          <Row label="Income" value={fmt(c.income)} tone="text-emerald-400" />
-          <Row label="Operating expenses" value={`(${fmt(c.opExpense)})`} tone="text-rose-400" />
-          <div className="border-t border-white/10 my-1" />
-          <Row label="Operating net" value={fmt(c.operatingNet)} tone={c.operatingNet >= 0 ? 'text-emerald-400' : 'text-amber-400'} />
-          <Row label="Tax / insurance paid this quarter" value={`(${fmt(c.reservedExpense)})`} tone="text-rose-400/70" dim />
-          <Row label="All-in net (incl. tax/insurance)" value={fmt(c.allInNet)} tone={c.allInNet >= 0 ? 'text-emerald-400/80' : 'text-amber-400'} dim />
-        </div>
-
-        {/* Reserve */}
-        <div className="border border-dashed border-amber-400/30 p-6 mb-6">
-          <div className="text-amber-400/70 text-xs tracking-widest uppercase mb-3">Tax / insurance reserve</div>
-          <Row label="Annual target (tax + insurance est.)" value={fmt(c.annualReserve)} dim />
-          <Row label="This quarter's reserve set-aside" value={`(${fmt(c.reserveTargetQuarter)})`} tone="text-amber-400/80" />
-          <div className="border-t border-white/10 my-1" />
-          <Row label={`Reserve accrued YTD (×${c.q})`} value={fmt(c.reserveAccrued)} dim />
-          <Row label="Tax / insurance paid YTD" value={`(${fmt(c.reservedPaidYtd)})`} dim />
-          <Row label="Reserve balance" value={fmt(c.reserveBalance)} tone={c.reserveBalance >= 0 ? 'text-emerald-400' : 'text-red-400'} />
-          {c.reserveBalance < 0 && (
-            <p className="text-[11px] text-red-400/70 mt-2">
-              Under-reserved: tax/insurance paid YTD exceeds what's been set aside — this is the cash pinch. Funding
-              the quarterly set-aside ahead of the bill smooths it.
-            </p>
-          )}
-        </div>
-
-        {/* Distributable + split */}
-        <div className="border border-white/10 p-6 mb-6">
-          <div className="text-white/30 text-xs tracking-widest uppercase mb-3">Distribution</div>
-          <Row label="Operating net" value={fmt(c.operatingNet)} dim />
-          <Row label="Less reserve set-aside" value={`(${fmt(c.reserveTargetQuarter)})`} dim />
-          <div className="border-t border-white/10 my-1" />
-          <Row label="Distributable (smoothed)" value={fmt(c.distributable)} tone={c.distributable >= 0 ? 'text-emerald-400' : 'text-amber-400'} />
-
-          <div className="mt-4 space-y-1">
-            {c.split.map((s) => (
-              <div key={s.owner_id} className="flex justify-between text-sm">
-                <span className="text-white/70">{s.name} <span className="text-white/30">· {s.pct.toFixed(2)}%</span></span>
-                <span className="text-white/80" style={{ fontFamily: 'Georgia, serif' }}>{fmt(s.amount)}</span>
-              </div>
-            ))}
-          </div>
-          {c.distributable <= 0 && (
-            <p className="text-[11px] text-white/40 mt-3">No smoothed distributable this quarter — you can still record an actual amount below.</p>
-          )}
-        </div>
-
-        {/* Recorded distribution status */}
-        {isRecorded && (
-          <div className="border border-emerald-400/20 p-6 mb-6">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-emerald-400/70 text-xs tracking-widest uppercase">Recorded distribution</span>
-              <span className="text-white/50 text-xs" style={{ fontFamily: 'Georgia, serif' }}>total {fmt(recordedTotal)}</span>
-            </div>
-            {recorded.map((r) => (
-              <div key={r.owner_id} className="flex justify-between text-sm">
-                <span className="text-white/70">{r.name}</span>
-                <span className="text-white/80" style={{ fontFamily: 'Georgia, serif' }}>{fmt(parseFloat(r.amount))}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Actions */}
-        <div className="flex flex-wrap items-end gap-3">
-          {!isRecorded ? (
-            <form action={recordDistribution} className="flex items-end gap-2">
-              <input type="hidden" name="property_id" value={propertyId} />
-              <input type="hidden" name="period" value={period} />
-              <div>
-                <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">Distribution total</label>
-                <input name="amount" type="number" step="0.01" min="0" defaultValue={Math.max(c.distributable, 0).toFixed(2)}
-                  className="w-32 bg-white/5 border border-white/20 px-3 py-1.5 text-white text-sm focus:outline-none focus:border-white/50" />
-              </div>
-              <button type="submit"
-                className="border border-emerald-400/30 text-emerald-400/80 px-5 py-2 text-xs tracking-widest uppercase hover:bg-emerald-400/10 transition-all">
-                Record distribution
-              </button>
-            </form>
-          ) : (
-            <form action={clearDistribution}>
-              <input type="hidden" name="property_id" value={propertyId} />
-              <input type="hidden" name="period" value={period} />
-              <button type="submit" className="border border-white/20 text-white/50 px-5 py-2 text-xs tracking-widest uppercase hover:bg-white/10 transition-all">
-                Clear distribution
-              </button>
-            </form>
-          )}
-
-          {!isClosed ? (
-            <form action={closePeriod}>
-              <input type="hidden" name="property_id" value={propertyId} />
-              <input type="hidden" name="label" value={period} />
-              <input type="hidden" name="period_start" value={start} />
-              <input type="hidden" name="period_end" value={end} />
-              <button type="submit" className="border border-white/30 px-5 py-2 text-xs tracking-widest uppercase hover:bg-white/10 transition-all">
-                Close quarter
-              </button>
-            </form>
-          ) : (
-            <form action={reopenPeriod}>
-              <input type="hidden" name="property_id" value={propertyId} />
-              <input type="hidden" name="label" value={period} />
-              <button type="submit" className="border border-amber-400/30 text-amber-400/70 px-5 py-2 text-xs tracking-widest uppercase hover:bg-amber-400/10 transition-all">
-                Reopen quarter
-              </button>
-            </form>
-          )}
-        </div>
-        <p className="text-[11px] text-white/25 mt-4">
-          The distribution total defaults to the smoothed distributable. Override it to match an actual distribution —
-          e.g. for history where you held back a specific bill — and it’s split by ownership %. Record, then close.
+        <p className="text-[11px] text-white/30 mb-6 max-w-xl">
+          Open a quarter to see its P&amp;L, the tax/insurance reserve, the distributable split by ownership, and to
+          record the distribution or close the quarter.
         </p>
+
+        <div className="border border-white/10">
+          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-4 px-6 py-3 border-b border-white/10 text-[10px] tracking-widest uppercase text-white/40">
+            <span>Quarter</span><span className="text-right">Actual net</span><span className="text-right">State</span><span className="text-right"></span>
+          </div>
+          {quarters.map((qt) => {
+            const isClosed = closedSet.has(qt.label)
+            const isDist = distSet.has(qt.label)
+            const n = net[qt.label] || 0
+            return (
+              <Link
+                key={qt.label}
+                href={`/real-estate/${propertyId}/periods/${qt.label}`}
+                className="grid grid-cols-[1fr_auto_auto_auto] gap-4 items-center px-6 py-4 border-b border-white/5 hover:bg-white/5 transition-colors"
+              >
+                <div>
+                  <div className="text-sm text-white/80" style={{ fontFamily: 'Georgia, serif' }}>{qt.label}</div>
+                  <div className="text-[11px] text-white/30">{qt.start} → {qt.end}</div>
+                </div>
+                <div className={`text-right text-sm ${n >= 0 ? 'text-emerald-400' : 'text-amber-400'}`} style={{ fontFamily: 'Georgia, serif' }}>
+                  ${n.toFixed(2)}
+                </div>
+                <div className="text-right text-xs tracking-widest uppercase">
+                  {isClosed ? <span className="text-amber-400/70">🔒 closed</span> : <span className="text-white/30">open</span>}
+                  {isDist ? <span className="text-emerald-400/60 ml-2">dist’d</span> : null}
+                </div>
+                <div className="text-right text-white/30 text-xs tracking-widest uppercase">Open →</div>
+              </Link>
+            )
+          })}
+        </div>
       </div>
     </main>
   )
