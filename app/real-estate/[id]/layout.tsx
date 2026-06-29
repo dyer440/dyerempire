@@ -24,7 +24,7 @@ export default async function PropertyLayout({
   const name = prop[0]?.name || ''
 
   return (
-    <div className="bg-black">
+    <div className="re-light">
       <PropertyNav propertyId={propertyId} name={name} canEdit={canEdit(role)} />
       {children}
     </div>
