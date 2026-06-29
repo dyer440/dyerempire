@@ -37,6 +37,7 @@ export async function initDb() {
       purchase_date DATE, purchase_price DECIMAL(12,2), notes TEXT, created_at TIMESTAMP DEFAULT NOW()
     )
   `
+  await sql`ALTER TABLE properties ADD COLUMN IF NOT EXISTS payback_flip BOOLEAN DEFAULT FALSE`
   await sql`
     CREATE TABLE IF NOT EXISTS units (
       id SERIAL PRIMARY KEY, property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
