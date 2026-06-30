@@ -91,13 +91,14 @@ export default async function PropertyPage({
 
   // ---- One ledger: actuals + scheduled, filtered to range, sorted chronologically ----
   const rows = (await sql`
-    SELECT t.id, t.type, t.category, t.amount, t.txn_date, t.description, t.status,
-           t.unit_id, u.label AS unit_label
+    SELECT t.id, t.type, t.category, t.amount,
+           to_char(t.txn_date, 'YYYY-MM-DD') AS txn_date,
+           t.description, t.status, t.unit_id, u.label AS unit_label
     FROM transactions t LEFT JOIN units u ON u.id = t.unit_id
     WHERE t.property_id = ${propertyId}
       AND t.txn_date BETWEEN ${fromDate} AND ${toDate}
       AND (t.status = 'actual' OR (t.status = 'forecast' AND t.txn_date >= date_trunc('month', CURRENT_DATE)))
-    ORDER BY t.txn_date ASC, (t.status = 'forecast'), t.created_at ASC
+    ORDER BY t.txn_date ASC, t.status ASC, t.created_at ASC
   `) as Txn[]
 
   let rangeIncome = 0, rangeExpense = 0, schedIncome = 0, schedExpense = 0
