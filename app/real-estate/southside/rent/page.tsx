@@ -39,20 +39,9 @@ export default async function RentRollPage() {
   const unitsByProp: Record<number, Record<string, any>[]> = {}
   for (const u of units) (unitsByProp[u.property_id] ||= []).push(u)
 
-  const columns: RentColumn[] = []
-  for (const p of properties) {
-    const us = unitsByProp[p.id] || []
-    if (us.length) {
-      for (const u of us) {
-        columns.push({ key: `u${u.id}`, propertyId: p.id, unitId: u.id, propertyName: p.name, unitLabel: u.label, tenant: u.current_tenant })
-      }
-    } else {
-      columns.push({ key: `p${p.id}`, propertyId: p.id, unitId: null, propertyName: p.name, unitLabel: null, tenant: p.current_tenant })
-    }
-  }
-
-  // Rent + deposits (deposits are Rental Income flagged is_deposit). Scheduled
-  // rents from the current month forward are included so they can be confirmed.
+  // Rent + deposits. Match any income whose category contains "rent" (so 'Rent',
+  // 'Rental Income', etc. all qualify) plus anything flagged as a deposit.
+  // Scheduled rents from the current month forward are included for confirming.
   const pays = (await sql`
     SELECT t.id, t.property_id, t.unit_id, t.amount::float8 AS amount,
            to_char(t.txn_date, 'YYYY-MM-DD') AS date, t.status,
@@ -63,11 +52,32 @@ export default async function RentRollPage() {
              WHERE pc.property_id = t.property_id AND t.txn_date BETWEEN pc.period_start AND pc.period_end
            ) AS locked
     FROM transactions t JOIN properties p ON p.id = t.property_id
-    WHERE p.status = 'active' AND t.type = 'income' AND t.category = 'Rental Income'
+    WHERE p.status = 'active' AND t.type = 'income'
+      AND (t.category ILIKE '%rent%' OR COALESCE(t.is_deposit, false) = true)
       AND (t.status = 'actual' OR (t.status = 'forecast' AND t.txn_date >= date_trunc('month', CURRENT_DATE)))
       AND COALESCE(t.rental_period, to_char(t.txn_date, 'YYYY-MM')) BETWEEN ${firstPeriod} AND ${lastPeriod}
     ORDER BY t.txn_date ASC, t.id ASC
   `) as Record<string, any>[]
+
+  // Properties that have rent booked at the whole-property level (no unit).
+  const orphanProps = new Set<number>()
+  for (const p of pays) if (p.unit_id == null) orphanProps.add(p.property_id)
+
+  const columns: RentColumn[] = []
+  for (const p of properties) {
+    const us = unitsByProp[p.id] || []
+    if (us.length) {
+      for (const u of us) {
+        columns.push({ key: `u${u.id}`, propertyId: p.id, unitId: u.id, propertyName: p.name, unitLabel: u.label, tenant: u.current_tenant })
+      }
+      // Catch-all column if any rent was booked without a unit on this property.
+      if (orphanProps.has(p.id)) {
+        columns.push({ key: `p${p.id}`, propertyId: p.id, unitId: null, propertyName: p.name, unitLabel: 'Whole property', tenant: p.current_tenant })
+      }
+    } else {
+      columns.push({ key: `p${p.id}`, propertyId: p.id, unitId: null, propertyName: p.name, unitLabel: null, tenant: p.current_tenant })
+    }
+  }
 
   const cells: Record<string, RentPayment[]> = {}
   for (const p of pays) {
