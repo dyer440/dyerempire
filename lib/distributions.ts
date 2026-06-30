@@ -1,4 +1,6 @@
-// lib/distributions.ts  (UPDATED — split is flip-aware: 50/50 after payback)
+// lib/distributions.ts  (UPDATED — split is flip-aware: 50/50 after payback;
+//                         quarter figures now INCLUDE scheduled items so the
+//                         projected quarter reflects what's still to come.)
 import sql from './db'
 import { flipActiveForPeriod } from './payback'
 
@@ -43,14 +45,25 @@ export type QuarterComputation = {
   reservedPaidYtd: number; reserveAccrued: number; reserveBalance: number
   split: OwnerSplit[]
   flipActive: boolean
+  // Projected-quarter transparency: figures above include scheduled items.
+  // `scheduledNet` is the net (income − expense) contributed by not-yet-confirmed
+  // scheduled rows in this quarter, so the UI can footnote "incl. scheduled".
+  scheduledIncluded: boolean
+  scheduledNet: number
 }
+
+// Actuals always count; scheduled (forecast) rows count only from the start of
+// the current month forward — the same boundary the ledger and the forecast
+// generator use, so nothing is double-counted across the present moment. The
+// condition is static SQL (no params), so it's inlined directly below.
 
 export async function computeQuarter(propertyId: number, period: string): Promise<QuarterComputation> {
   const { q, start, end, yearStart, label } = quarterBounds(period)
 
   const rows = (await sql`
     SELECT type, category, COALESCE(SUM(amount), 0)::float8 AS total
-    FROM transactions WHERE property_id = ${propertyId} AND status = 'actual'
+    FROM transactions WHERE property_id = ${propertyId}
+      AND (status = 'actual' OR (status = 'forecast' AND txn_date >= date_trunc('month', CURRENT_DATE)))
       AND txn_date BETWEEN ${start} AND ${end}
     GROUP BY type, category
   `) as { type: string; category: string; total: number }[]
@@ -65,10 +78,23 @@ export async function computeQuarter(propertyId: number, period: string): Promis
   const operatingNet = income - opExpense
   const allInNet = income - opExpense - reservedExpense
 
+  // Net contributed by scheduled rows alone (for the "incl. scheduled" footnote).
+  const schedRows = (await sql`
+    SELECT type, COALESCE(SUM(amount), 0)::float8 AS total
+    FROM transactions WHERE property_id = ${propertyId}
+      AND status = 'forecast' AND txn_date >= date_trunc('month', CURRENT_DATE)
+      AND txn_date BETWEEN ${start} AND ${end}
+    GROUP BY type
+  `) as { type: string; total: number }[]
+  let scheduledNet = 0
+  for (const r of schedRows) scheduledNet += r.type === 'income' ? r.total : -r.total
+  const scheduledIncluded = scheduledNet !== 0
+
   const annualReserve = await reserveTargetAnnual(propertyId)
   const reserveTargetQuarter = annualReserve / 4
   const distributable = operatingNet - reserveTargetQuarter
 
+  // "Paid YTD" means actually paid — keep this actuals-only.
   const paidRows = (await sql`
     SELECT COALESCE(SUM(amount), 0)::float8 AS total
     FROM transactions WHERE property_id = ${propertyId} AND status = 'actual'
@@ -97,5 +123,6 @@ export async function computeQuarter(propertyId: number, period: string): Promis
     label, start, end, q, income, opExpense, reservedExpense,
     operatingNet, allInNet, annualReserve, reserveTargetQuarter, distributable,
     reservedPaidYtd, reserveAccrued, reserveBalance, split, flipActive,
+    scheduledIncluded, scheduledNet,
   }
 }
