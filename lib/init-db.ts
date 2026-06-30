@@ -31,6 +31,17 @@ export async function initDb() {
       email TEXT, created_at TIMESTAMP DEFAULT NOW()
     )
   `
+  // Entities: the spine. Every set of books (a property, the management co, a
+  // holding entity, a person) is an entity. property | management_co | holding_co | person.
+  await sql`
+    CREATE TABLE IF NOT EXISTS entities (
+      id SERIAL PRIMARY KEY, slug TEXT, name TEXT NOT NULL, legal_name TEXT, dba TEXT,
+      type TEXT NOT NULL DEFAULT 'property', tax_id TEXT, status TEXT DEFAULT 'active',
+      notes TEXT, created_at TIMESTAMP DEFAULT NOW()
+    )
+  `
+  await sql`CREATE INDEX IF NOT EXISTS idx_entities_slug ON entities(slug)`
+  await sql`CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type)`
   await sql`
     CREATE TABLE IF NOT EXISTS properties (
       id SERIAL PRIMARY KEY, name TEXT NOT NULL, holding_entity TEXT, property_type TEXT,
@@ -40,6 +51,8 @@ export async function initDb() {
   `
   await sql`ALTER TABLE properties ADD COLUMN IF NOT EXISTS payback_flip BOOLEAN DEFAULT FALSE`
   await sql`ALTER TABLE properties ADD COLUMN IF NOT EXISTS current_tenant TEXT`
+  await sql`ALTER TABLE properties ADD COLUMN IF NOT EXISTS entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL`
+  await sql`ALTER TABLE properties ADD COLUMN IF NOT EXISTS slug TEXT`
   await sql`
     CREATE TABLE IF NOT EXISTS units (
       id SERIAL PRIMARY KEY, property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
@@ -68,10 +81,15 @@ export async function initDb() {
   await sql`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'actual'`
   await sql`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS rental_period TEXT`
   await sql`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS is_deposit BOOLEAN DEFAULT FALSE`
+  await sql`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL`
+  await sql`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS transfer_group TEXT`
+  await sql`ALTER TABLE transactions ALTER COLUMN property_id DROP NOT NULL`
   await sql`CREATE INDEX IF NOT EXISTS idx_txn_property ON transactions(property_id)`
   await sql`CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(txn_date)`
   await sql`CREATE INDEX IF NOT EXISTS idx_txn_status ON transactions(status)`
   await sql`CREATE INDEX IF NOT EXISTS idx_txn_rental_period ON transactions(rental_period)`
+  await sql`CREATE INDEX IF NOT EXISTS idx_txn_entity ON transactions(entity_id)`
+  await sql`CREATE INDEX IF NOT EXISTS idx_txn_transfer ON transactions(transfer_group)`
 
   await sql`
     CREATE TABLE IF NOT EXISTS recurring_schedules (
@@ -85,6 +103,7 @@ export async function initDb() {
       status TEXT DEFAULT 'active', created_at TIMESTAMP DEFAULT NOW()
     )
   `
+  await sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL`
 
   // --- link transactions back to the schedule that spawned them ---
   // Enables: (a) confirming a scheduled row in place, and (b) the forecast
