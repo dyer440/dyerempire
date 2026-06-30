@@ -1,4 +1,5 @@
-// lib/init-db.ts  (adds capital_contributions, depreciation_schedule, annual_income)
+// lib/init-db.ts  (adds capital_contributions, depreciation_schedule, annual_income,
+//                  and transactions.schedule_id for confirm-in-place + regen dedup)
 import sql from './db'
 
 export async function initDb() {
@@ -79,6 +80,23 @@ export async function initDb() {
       status TEXT DEFAULT 'active', created_at TIMESTAMP DEFAULT NOW()
     )
   `
+
+  // --- link transactions back to the schedule that spawned them ---
+  // Enables: (a) confirming a scheduled row in place, and (b) the forecast
+  // generator skipping any month that already has a confirmed actual, so
+  // Regenerate never double-counts a confirmed item.
+  await sql`
+    ALTER TABLE transactions
+    ADD COLUMN IF NOT EXISTS schedule_id INTEGER REFERENCES recurring_schedules(id) ON DELETE SET NULL
+  `
+  await sql`CREATE INDEX IF NOT EXISTS idx_txn_schedule ON transactions(schedule_id)`
+  // Backfill existing forecast rows from the legacy created_by='schedule:N' stamp.
+  await sql`
+    UPDATE transactions
+    SET schedule_id = NULLIF(split_part(created_by, ':', 2), '')::INTEGER
+    WHERE schedule_id IS NULL AND created_by LIKE 'schedule:%'
+  `
+
   await sql`
     CREATE TABLE IF NOT EXISTS period_closes (
       id SERIAL PRIMARY KEY,
