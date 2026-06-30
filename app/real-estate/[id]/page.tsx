@@ -1,4 +1,5 @@
-// app/real-estate/[id]/page.tsx  (UPDATED — date filter scopes scheduled list too; remove forecast; month stepper)
+// app/real-estate/[id]/page.tsx  (UPDATED — scheduled + actuals merged into ONE
+//   chronological list; actuals now editable inline; Southside link for editors)
 import { auth } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
@@ -7,10 +8,11 @@ import { getUserRole, canAccessProperty, canEdit } from '@/lib/access'
 import { INCOME_CATEGORIES, EXPENSE_CATEGORIES } from '@/lib/categories'
 import { addTransaction, deleteTransaction } from '../actions'
 import { markForecastPaid, deleteForecast } from '../recurring/actions'
+import { editTransaction } from '../ledger-form-actions'
 
 type Txn = {
   id: number; type: string; category: string; amount: string; txn_date: string
-  description: string | null; unit_label: string | null; status: string
+  description: string | null; unit_label: string | null; unit_id: number | null; status: string
 }
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -57,7 +59,7 @@ export default async function PropertyPage({
   const units = (await sql`SELECT id, label FROM units WHERE property_id = ${propertyId} ORDER BY id`) as
     { id: number; label: string }[]
 
-  // ---- Date range (scopes BOTH the ledger and the scheduled list) ----
+  // ---- Date range (scopes the merged ledger) ----
   const year = new Date().getFullYear()
   const isAll = sp.all === '1'
   const isDefault = !isAll && !sp.from && !sp.to
@@ -87,32 +89,33 @@ export default async function PropertyPage({
   for (const r of proj) { if (r.type === 'income') projIncome = r.total; else projExpense = r.total }
   const projNet = projIncome - projExpense
 
-  // ---- Actual ledger, filtered to range ----
-  const actuals = (await sql`
-    SELECT t.id, t.type, t.category, t.amount, t.txn_date, t.description, t.status, u.label AS unit_label
+  // ---- One ledger: actuals + scheduled, filtered to range, sorted chronologically ----
+  const rows = (await sql`
+    SELECT t.id, t.type, t.category, t.amount, t.txn_date, t.description, t.status,
+           t.unit_id, u.label AS unit_label
     FROM transactions t LEFT JOIN units u ON u.id = t.unit_id
-    WHERE t.property_id = ${propertyId} AND t.status = 'actual'
+    WHERE t.property_id = ${propertyId}
       AND t.txn_date BETWEEN ${fromDate} AND ${toDate}
-    ORDER BY t.txn_date DESC, t.created_at DESC
+      AND (t.status = 'actual' OR (t.status = 'forecast' AND t.txn_date >= date_trunc('month', CURRENT_DATE)))
+    ORDER BY t.txn_date ASC, (t.status = 'forecast'), t.created_at ASC
   `) as Txn[]
-  let rangeIncome = 0, rangeExpense = 0
-  for (const t of actuals) { const a = parseFloat(t.amount); if (t.type === 'income') rangeIncome += a; else rangeExpense += a }
-  const rangeNet = rangeIncome - rangeExpense
 
-  // ---- Scheduled (forecast), filtered to the SAME range ----
-  const forecasts = (await sql`
-    SELECT t.id, t.type, t.category, t.amount, t.txn_date, t.description, t.status, u.label AS unit_label
-    FROM transactions t LEFT JOIN units u ON u.id = t.unit_id
-    WHERE t.property_id = ${propertyId} AND t.status = 'forecast'
-      AND t.txn_date BETWEEN ${fromDate} AND ${toDate}
-    ORDER BY t.txn_date ASC
-  `) as Txn[]
-  let schedIncome = 0, schedExpense = 0
-  for (const t of forecasts) { const a = parseFloat(t.amount); if (t.type === 'income') schedIncome += a; else schedExpense += a }
+  let rangeIncome = 0, rangeExpense = 0, schedIncome = 0, schedExpense = 0
+  for (const t of rows) {
+    const a = parseFloat(t.amount)
+    if (t.status === 'actual') {
+      if (t.type === 'income') rangeIncome += a; else rangeExpense += a
+    } else {
+      if (t.type === 'income') schedIncome += a; else schedExpense += a
+    }
+  }
+  const rangeNet = rangeIncome - rangeExpense
   const schedNet = schedIncome - schedExpense
 
   const todayStr = new Date().toISOString().split('T')[0]
   const fmt = (n: number) => `$${n.toFixed(2)}`
+  const longDate = (d: string) =>
+    new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 
   // ---- Filter preset helpers ----
   const base = `/real-estate/${propertyId}`
@@ -126,6 +129,21 @@ export default async function PropertyPage({
   const prevM = monthRange(fy, fmth - 1)
   const nextM = monthRange(fy, fmth + 1)
   const thisM = monthRange(year, new Date().getMonth() + 1)
+
+  // Group the merged list by month for a clean chronological scan.
+  const groups: { key: string; label: string; items: Txn[] }[] = []
+  for (const t of rows) {
+    const key = t.txn_date.slice(0, 7)
+    let g = groups[groups.length - 1]
+    if (!g || g.key !== key) {
+      g = { key, label: new Date(t.txn_date).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }), items: [] }
+      groups.push(g)
+    }
+    g.items.push(t)
+  }
+
+  const editFieldCls =
+    'bg-white/5 border border-white/20 px-2 py-1 text-white placeholder:text-white/30 text-xs focus:outline-none focus:border-white/50'
 
   return (
     <main className="min-h-screen bg-black text-white p-6 md:p-10">
@@ -143,9 +161,14 @@ export default async function PropertyPage({
               ← All Properties
             </Link>
             {editable && (
-              <Link href={`${base}/schedules`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
-                Schedules →
-              </Link>
+              <>
+                <Link href={`${base}/schedules`} className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
+                  Schedules →
+                </Link>
+                <Link href="/real-estate/southside" className="text-white/30 hover:text-white text-xs tracking-widest uppercase transition-colors">
+                  Southside →
+                </Link>
+              </>
             )}
           </div>
         </div>
@@ -226,7 +249,7 @@ export default async function PropertyPage({
           </form>
         )}
 
-        {/* ---- Date filter (applies to ledger AND scheduled) ---- */}
+        {/* ---- Date filter (applies to the merged ledger) ---- */}
         <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
           <form method="get" className="flex items-end gap-2">
             <div>
@@ -254,104 +277,129 @@ export default async function PropertyPage({
           </div>
         </div>
 
-        {/* Scheduled (forecast) — filtered to range */}
-        {forecasts.length > 0 && (
-          <div className="border border-dashed border-white/15 mb-8">
-            <div className="px-6 py-3 border-b border-white/10 flex items-center justify-between">
-              <span className="text-xs tracking-widest uppercase text-amber-400/60">Scheduled · in range ({forecasts.length})</span>
-              <span className="text-xs tracking-widest uppercase text-white/40">
-                net <span className={schedNet >= 0 ? 'text-emerald-400/80' : 'text-amber-400'} style={{ fontFamily: 'Georgia, serif' }}>{fmt(schedNet)}</span>
-              </span>
-            </div>
-            {forecasts.map((t) => {
-              const a = parseFloat(t.amount)
-              const income = t.type === 'income'
-              return (
-                <div key={t.id} className="flex items-center justify-between px-6 py-3 border-b border-white/5">
-                  <div className="flex items-center gap-6">
-                    <div className={`text-sm w-24 ${income ? 'text-emerald-400/60' : 'text-rose-400/60'}`} style={{ fontFamily: 'Georgia, serif' }}>
-                      {income ? '+' : '−'}{fmt(a)}
-                    </div>
-                    <div>
-                      <div className="text-sm text-white/50">{t.category}</div>
-                      <div className="text-xs text-white/30 mt-0.5">
-                        {new Date(t.txn_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}
-                        {t.unit_label ? ` · ${t.unit_label}` : ''}{t.description ? ` · ${t.description}` : ''}
-                      </div>
-                    </div>
-                  </div>
-                  {editable && (
-                    <div className="flex items-center gap-2">
-                      <form action={markForecastPaid} className="flex items-center gap-2">
-                        <input type="hidden" name="property_id" value={prop.id} />
-                        <input type="hidden" name="id" value={t.id} />
-                        <input name="actual_amount" type="number" step="0.01" min="0.01" placeholder={a.toFixed(2)}
-                          className="w-24 bg-white/5 border border-white/20 px-2 py-1 text-white placeholder:text-white/30 text-xs focus:outline-none focus:border-white/50" />
-                        <input name="actual_date" type="date"
-                          className="bg-white/5 border border-white/20 px-2 py-1 text-white text-xs focus:outline-none focus:border-white/50" />
-                        <button type="submit" className="border border-emerald-400/30 text-emerald-400/80 px-3 py-1 text-xs tracking-widest uppercase hover:bg-emerald-400/10 transition-all whitespace-nowrap">
-                          Mark paid
-                        </button>
-                      </form>
-                      <form action={deleteForecast}>
-                        <input type="hidden" name="property_id" value={prop.id} />
-                        <input type="hidden" name="id" value={t.id} />
-                        <button type="submit" className="text-xs text-white/20 hover:text-red-400 tracking-widest uppercase transition-colors">
-                          Remove
-                        </button>
-                      </form>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-            <div className="px-6 py-2 text-[11px] text-white/25">
-              “Mark paid” converts a scheduled item to an actual (correct the amount/date for estimates). “Remove”
-              skips this one occurrence — Regenerate will recreate it from the schedule; pause/edit the schedule to stop it for good.
-            </div>
-          </div>
-        )}
-
-        {/* Actual ledger — filtered to range */}
+        {/* ---- Merged ledger: actuals + scheduled, chronological ---- */}
         <div className="border border-white/10">
-          <div className="px-6 py-3 border-b border-white/10 flex items-center justify-between">
-            <span className="text-xs tracking-widest uppercase text-white/40">Ledger · actuals ({actuals.length})</span>
+          <div className="px-6 py-3 border-b border-white/10 flex items-center justify-between flex-wrap gap-2">
+            <span className="text-xs tracking-widest uppercase text-white/40">Ledger · in range ({rows.length})</span>
             <span className="text-xs tracking-widest uppercase text-white/40">
-              range net <span className={rangeNet >= 0 ? 'text-emerald-400' : 'text-amber-400'} style={{ fontFamily: 'Georgia, serif' }}>{fmt(rangeNet)}</span>
+              actual <span className={rangeNet >= 0 ? 'text-emerald-400' : 'text-amber-400'} style={{ fontFamily: 'Georgia, serif' }}>{fmt(rangeNet)}</span>
+              {schedNet !== 0 && (
+                <> · scheduled <span className={schedNet >= 0 ? 'text-emerald-400/70' : 'text-amber-400/80'} style={{ fontFamily: 'Georgia, serif' }}>{fmt(schedNet)}</span></>
+              )}
             </span>
           </div>
-          {actuals.length === 0 && (
+
+          {rows.length === 0 && (
             <div className="px-6 py-8 text-center text-white/20 text-sm tracking-widest uppercase">No transactions in range</div>
           )}
-          {actuals.map((t) => {
-            const a = parseFloat(t.amount)
-            const income = t.type === 'income'
-            return (
-              <div key={t.id} className="flex items-center justify-between px-6 py-4 border-b border-white/5 hover:bg-white/5">
-                <div className="flex items-center gap-6">
-                  <div className={`text-sm w-24 ${income ? 'text-emerald-400' : 'text-rose-400'}`} style={{ fontFamily: 'Georgia, serif' }}>
-                    {income ? '+' : '−'}{fmt(a)}
-                  </div>
-                  <div>
-                    <div className="text-sm text-white/70">{t.category}</div>
-                    <div className="text-xs text-white/40 mt-0.5">
-                      {new Date(t.txn_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}
-                      {t.unit_label ? ` · ${t.unit_label}` : ''}{t.description ? ` · ${t.description}` : ''}
+
+          {groups.map((g) => (
+            <div key={g.key}>
+              <div className="px-6 py-1.5 bg-white/5 text-[11px] tracking-widest uppercase text-white/30">{g.label}</div>
+              {g.items.map((t) => {
+                const a = parseFloat(t.amount)
+                const income = t.type === 'income'
+                const scheduled = t.status === 'forecast'
+                return (
+                  <div key={`${t.status}-${t.id}`}
+                    className={`px-6 py-3 border-b border-white/5 ${scheduled ? 'bg-amber-400/[0.03]' : 'hover:bg-white/5'}`}>
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-6">
+                        <div className={`text-sm w-24 ${scheduled ? (income ? 'text-emerald-400/60' : 'text-rose-400/60') : (income ? 'text-emerald-400' : 'text-rose-400')}`} style={{ fontFamily: 'Georgia, serif' }}>
+                          {income ? '+' : '−'}{fmt(a)}
+                        </div>
+                        <div>
+                          <div className={`text-sm ${scheduled ? 'text-white/50' : 'text-white/70'} flex items-center gap-2`}>
+                            {t.category}
+                            {scheduled && (
+                              <span className="rounded-full border border-amber-400/40 text-amber-400/80 px-2 py-0.5 text-[10px] tracking-widest uppercase">Scheduled</span>
+                            )}
+                          </div>
+                          <div className={`text-xs ${scheduled ? 'text-white/30' : 'text-white/40'} mt-0.5`}>
+                            {longDate(t.txn_date)}
+                            {t.unit_label ? ` · ${t.unit_label}` : ''}{t.description ? ` · ${t.description}` : ''}
+                          </div>
+                        </div>
+                      </div>
+
+                      {editable && (
+                        <div className="flex items-center gap-2 shrink-0">
+                          {scheduled ? (
+                            <>
+                              <form action={markForecastPaid} className="flex items-center gap-2">
+                                <input type="hidden" name="property_id" value={prop.id} />
+                                <input type="hidden" name="id" value={t.id} />
+                                <input name="actual_amount" type="number" step="0.01" min="0.01" placeholder={a.toFixed(2)}
+                                  className="w-24 bg-white/5 border border-white/20 px-2 py-1 text-white placeholder:text-white/30 text-xs focus:outline-none focus:border-white/50" />
+                                <input name="actual_date" type="date"
+                                  className="bg-white/5 border border-white/20 px-2 py-1 text-white text-xs focus:outline-none focus:border-white/50" />
+                                <button type="submit" className="border border-emerald-400/30 text-emerald-400/80 px-3 py-1 text-xs tracking-widest uppercase hover:bg-emerald-400/10 transition-all whitespace-nowrap">
+                                  Confirm
+                                </button>
+                              </form>
+                              <form action={deleteForecast}>
+                                <input type="hidden" name="property_id" value={prop.id} />
+                                <input type="hidden" name="id" value={t.id} />
+                                <button type="submit" className="text-xs text-white/20 hover:text-red-400 tracking-widest uppercase transition-colors">
+                                  Skip
+                                </button>
+                              </form>
+                            </>
+                          ) : (
+                            <form action={deleteTransaction}>
+                              <input type="hidden" name="id" value={t.id} />
+                              <input type="hidden" name="property_id" value={prop.id} />
+                              <button type="submit" className="text-xs text-white/20 hover:text-red-400 tracking-widest uppercase transition-colors">
+                                Remove
+                              </button>
+                            </form>
+                          )}
+                        </div>
+                      )}
                     </div>
+
+                    {/* Inline edit for actuals — native disclosure, no client JS */}
+                    {editable && !scheduled && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer list-none ml-auto w-fit text-xs text-white/30 hover:text-white tracking-widest uppercase transition-colors select-none">
+                          Edit
+                        </summary>
+                        <form action={editTransaction} className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2 border-t border-white/5 pt-3">
+                          <input type="hidden" name="id" value={t.id} />
+                          <input type="hidden" name="property_id" value={prop.id} />
+                          <select name="category" defaultValue={t.category} className={editFieldCls}>
+                            <optgroup label="Income">
+                              {INCOME_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                            </optgroup>
+                            <optgroup label="Expense">
+                              {EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                            </optgroup>
+                          </select>
+                          <input name="amount" type="number" step="0.01" min="0.01" defaultValue={a.toFixed(2)} className={editFieldCls} />
+                          <input name="txn_date" type="date" defaultValue={t.txn_date.slice(0, 10)} className={editFieldCls} />
+                          <select name="unit_id" defaultValue={t.unit_id ?? ''} className={editFieldCls}>
+                            <option value="">Whole property</option>
+                            {units.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}
+                          </select>
+                          <input name="description" type="text" defaultValue={t.description ?? ''} placeholder="Description" className={editFieldCls} />
+                          <button type="submit" className="border border-white/30 px-4 py-1 text-xs tracking-widest uppercase hover:bg-white/10 transition-all">
+                            Save
+                          </button>
+                        </form>
+                      </details>
+                    )}
                   </div>
-                </div>
-                {editable && (
-                  <form action={deleteTransaction}>
-                    <input type="hidden" name="id" value={t.id} />
-                    <input type="hidden" name="property_id" value={prop.id} />
-                    <button type="submit" className="text-xs text-white/20 hover:text-red-400 tracking-widest uppercase transition-colors">
-                      Remove
-                    </button>
-                  </form>
-                )}
-              </div>
-            )
-          })}
+                )
+              })}
+            </div>
+          ))}
+
+          {editable && (
+            <div className="px-6 py-2 text-[11px] text-white/25">
+              “Confirm” turns a scheduled item into an actual (adjust the amount/date if it cleared differently). “Skip”
+              drops one occurrence (Regenerate recreates it — edit the schedule to stop it for good). “Edit” opens an actual row to fix the amount, date, category, or unit.
+            </div>
+          )}
         </div>
       </div>
     </main>
