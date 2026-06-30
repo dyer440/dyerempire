@@ -12,6 +12,7 @@ import { getEditorEmail } from '@/lib/ledger-guard'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import LedgerView, { LedgerRow } from '@/app/real-estate/_components/LedgerView'
+import LedgerRangeControls from '@/app/real-estate/_components/LedgerRangeControls'
 
 function ymd(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -66,6 +67,8 @@ export default async function SouthsidePage({
           ← Properties
         </Link>
       </div>
+
+      <LedgerRangeControls from={from} to={to} />
 
       <LedgerView
         rows={rows as LedgerRow[]}
