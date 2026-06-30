@@ -1,191 +1,87 @@
-// lib/init-db.ts  (adds capital_contributions, depreciation_schedule, annual_income,
-//                  and transactions.schedule_id for confirm-in-place + regen dedup)
-import sql from './db'
+// app/real-estate/southside/page.tsx
+// "Southside Properties" — the bank-reconciliation / entry workspace.
+// One list across EVERY property, mirroring the shared Southside checking
+// statement Betsy works from. Editor-only (admin/manager). Zach (partner)
+// is redirected and it never appears in his nav.
+//
+// NOTE: this is a banking/management view, not an ownership entity. It exists
+// so cross-property entry doesn't clutter the per-property pages.
+import sql from '@/lib/db'
+import { initDb } from '@/lib/init-db'
+import { getEditorEmail } from '@/lib/ledger-guard'
+import { redirect } from 'next/navigation'
+import Link from 'next/link'
+import LedgerView, { LedgerRow } from '@/app/real-estate/_components/LedgerView'
+import LedgerRangeControls from '@/app/real-estate/_components/LedgerRangeControls'
+import SouthsideTabs from '@/app/real-estate/_components/SouthsideTabs'
 
-export async function initDb() {
-  await sql`
-    CREATE TABLE IF NOT EXISTS allowed_users (
-      id SERIAL PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      name TEXT,
-      role TEXT DEFAULT 'viewer',
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `
-  await sql`ALTER TABLE allowed_users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'viewer'`
-  await sql`
-    INSERT INTO allowed_users (email, name, role)
-    VALUES ('david.dyer.24@gmail.com', 'David Dyer', 'admin')
-    ON CONFLICT (email) DO UPDATE SET role = 'admin'
-  `
+function ymd(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
-  await sql`
-    CREATE TABLE IF NOT EXISTS page_access (
-      id SERIAL PRIMARY KEY, page_key TEXT NOT NULL, email TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW(), UNIQUE (page_key, email)
-    )
-  `
-  await sql`
-    CREATE TABLE IF NOT EXISTS owners (
-      id SERIAL PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'entity',
-      email TEXT, created_at TIMESTAMP DEFAULT NOW()
-    )
-  `
-  await sql`
-    CREATE TABLE IF NOT EXISTS properties (
-      id SERIAL PRIMARY KEY, name TEXT NOT NULL, holding_entity TEXT, property_type TEXT,
-      address TEXT, city TEXT, state TEXT, zip TEXT, status TEXT DEFAULT 'active',
-      purchase_date DATE, purchase_price DECIMAL(12,2), notes TEXT, created_at TIMESTAMP DEFAULT NOW()
-    )
-  `
-  await sql`ALTER TABLE properties ADD COLUMN IF NOT EXISTS payback_flip BOOLEAN DEFAULT FALSE`
-  await sql`
-    CREATE TABLE IF NOT EXISTS units (
-      id SERIAL PRIMARY KEY, property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-      label TEXT NOT NULL, address TEXT, notes TEXT
-    )
-  `
-  await sql`
-    CREATE TABLE IF NOT EXISTS property_owners (
-      id SERIAL PRIMARY KEY,
-      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-      owner_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-      ownership_pct DECIMAL(7,4) NOT NULL, UNIQUE (property_id, owner_id)
-    )
-  `
-  await sql`
-    CREATE TABLE IF NOT EXISTS transactions (
-      id SERIAL PRIMARY KEY,
-      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-      unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
-      type TEXT NOT NULL, category TEXT NOT NULL, amount DECIMAL(12,2) NOT NULL,
-      txn_date DATE NOT NULL, description TEXT, method TEXT, created_by TEXT,
-      status TEXT DEFAULT 'actual', created_at TIMESTAMP DEFAULT NOW()
-    )
-  `
-  await sql`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'actual'`
-  await sql`CREATE INDEX IF NOT EXISTS idx_txn_property ON transactions(property_id)`
-  await sql`CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(txn_date)`
-  await sql`CREATE INDEX IF NOT EXISTS idx_txn_status ON transactions(status)`
+export default async function SouthsidePage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | undefined>> | Record<string, string | undefined>
+}) {
+  await initDb()
+  const editor = await getEditorEmail()
+  if (!editor) redirect('/real-estate')
 
-  await sql`
-    CREATE TABLE IF NOT EXISTS recurring_schedules (
-      id SERIAL PRIMARY KEY,
-      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-      unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
-      type TEXT NOT NULL, category TEXT NOT NULL, description TEXT,
-      amount DECIMAL(12,2) NOT NULL, is_estimate BOOLEAN DEFAULT FALSE,
-      frequency TEXT NOT NULL, months_csv TEXT, day_of_month INTEGER DEFAULT 15,
-      growth_pct DECIMAL(6,2) DEFAULT 0, start_date DATE, end_date DATE,
-      status TEXT DEFAULT 'active', created_at TIMESTAMP DEFAULT NOW()
-    )
-  `
+  const sp = (await searchParams) || {}
+  const now = new Date()
+  const fromDefault = ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1))
+  const toDefault = ymd(new Date(now.getFullYear(), now.getMonth() + 13, 0))
+  const from = sp.from || fromDefault
+  const to = sp.to || toDefault
 
-  // --- link transactions back to the schedule that spawned them ---
-  // Enables: (a) confirming a scheduled row in place, and (b) the forecast
-  // generator skipping any month that already has a confirmed actual, so
-  // Regenerate never double-counts a confirmed item.
-  await sql`
-    ALTER TABLE transactions
-    ADD COLUMN IF NOT EXISTS schedule_id INTEGER REFERENCES recurring_schedules(id) ON DELETE SET NULL
-  `
-  await sql`CREATE INDEX IF NOT EXISTS idx_txn_schedule ON transactions(schedule_id)`
-  // Backfill existing forecast rows from the legacy created_by='schedule:N' stamp.
-  await sql`
-    UPDATE transactions
-    SET schedule_id = NULLIF(split_part(created_by, ':', 2), '')::INTEGER
-    WHERE schedule_id IS NULL AND created_by LIKE 'schedule:%'
-  `
+  const properties = (await sql`
+    SELECT id, name FROM properties WHERE status = 'active' ORDER BY name
+  `) as Record<string, any>[]
 
-  await sql`
-    CREATE TABLE IF NOT EXISTS period_closes (
-      id SERIAL PRIMARY KEY,
-      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-      period_start DATE NOT NULL, period_end DATE NOT NULL, label TEXT NOT NULL,
-      closed_by TEXT, closed_at TIMESTAMP DEFAULT NOW(), UNIQUE (property_id, label)
-    )
-  `
+  const rows = (await sql`
+    SELECT t.id, t.property_id, p.name AS property_name, t.type, t.category,
+           t.amount::float8 AS amount, to_char(t.txn_date, 'YYYY-MM-DD') AS txn_date,
+           t.description, t.status,
+           EXISTS (
+             SELECT 1 FROM period_closes pc
+             WHERE pc.property_id = t.property_id AND t.txn_date BETWEEN pc.period_start AND pc.period_end
+           ) AS locked
+    FROM transactions t JOIN properties p ON p.id = t.property_id
+    WHERE p.status = 'active'
+      AND t.txn_date >= ${from}::date AND t.txn_date <= ${to}::date
+      AND (t.status = 'actual' OR (t.status = 'forecast' AND t.txn_date >= date_trunc('month', CURRENT_DATE)))
+    ORDER BY t.txn_date ASC, p.name ASC, t.id ASC
+  `) as Record<string, any>[]
 
-  // --- capital accounts ---
-  await sql`
-    CREATE TABLE IF NOT EXISTS capital_contributions (
-      id SERIAL PRIMARY KEY,
-      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-      owner_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-      amount DECIMAL(12,2) NOT NULL, contributed_on DATE NOT NULL, note TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `
-  await sql`
-    CREATE TABLE IF NOT EXISTS depreciation_schedule (
-      id SERIAL PRIMARY KEY,
-      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-      year INTEGER NOT NULL, amount DECIMAL(12,2) NOT NULL, UNIQUE (property_id, year)
-    )
-  `
-  await sql`
-    CREATE TABLE IF NOT EXISTS annual_income (
-      id SERIAL PRIMARY KEY,
-      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-      year INTEGER NOT NULL, real_net_income DECIMAL(12,2) NOT NULL, note TEXT,
-      UNIQUE (property_id, year)
-    )
-  `
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-6">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">Southside Properties — Entry &amp; reconciliation</h1>
+          <p className="text-sm text-gray-500">
+            Every property in one list, in date order — matched to the Southside checking statement.
+            Confirm scheduled items as they clear, or add new ones. Tag each entry to its property.
+          </p>
+        </div>
+        <Link href="/real-estate" className="text-sm text-blue-700 hover:underline">
+          ← Properties
+        </Link>
+      </div>
 
-  await sql`
-    CREATE TABLE IF NOT EXISTS tenants (
-      id SERIAL PRIMARY KEY, name TEXT NOT NULL, email TEXT, phone TEXT, notes TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `
-  await sql`
-    CREATE TABLE IF NOT EXISTS leases (
-      id SERIAL PRIMARY KEY,
-      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-      unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
-      tenant_id INTEGER REFERENCES tenants(id) ON DELETE SET NULL,
-      monthly_rent DECIMAL(12,2), rent_due_day INTEGER DEFAULT 1, deposit_amount DECIMAL(12,2),
-      start_date DATE, end_date DATE, status TEXT DEFAULT 'active', created_at TIMESTAMP DEFAULT NOW()
-    )
-  `
-  await sql`
-    CREATE TABLE IF NOT EXISTS rent_charges (
-      id SERIAL PRIMARY KEY, lease_id INTEGER NOT NULL REFERENCES leases(id) ON DELETE CASCADE,
-      period_month DATE NOT NULL, amount_due DECIMAL(12,2) NOT NULL, status TEXT DEFAULT 'open',
-      created_at TIMESTAMP DEFAULT NOW(), UNIQUE (lease_id, period_month)
-    )
-  `
-  await sql`
-    CREATE TABLE IF NOT EXISTS deposits (
-      id SERIAL PRIMARY KEY, lease_id INTEGER NOT NULL REFERENCES leases(id) ON DELETE CASCADE,
-      amount_held DECIMAL(12,2) NOT NULL, received_on DATE, returned_on DATE,
-      status TEXT DEFAULT 'held', notes TEXT
-    )
-  `
-  await sql`
-    CREATE TABLE IF NOT EXISTS obligations (
-      id SERIAL PRIMARY KEY, property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-      type TEXT NOT NULL, description TEXT, amount DECIMAL(12,2), due_date DATE,
-      frequency TEXT DEFAULT 'annual', status TEXT DEFAULT 'upcoming',
-      paid_transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `
-  await sql`
-    CREATE TABLE IF NOT EXISTS distributions (
-      id SERIAL PRIMARY KEY, period TEXT NOT NULL,
-      property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-      owner_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-      amount DECIMAL(12,2) NOT NULL, distributed_on DATE, status TEXT DEFAULT 'pending',
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `
-  await sql`
-    CREATE TABLE IF NOT EXISTS documents (
-      id SERIAL PRIMARY KEY,
-      property_id INTEGER REFERENCES properties(id) ON DELETE CASCADE,
-      lease_id INTEGER REFERENCES leases(id) ON DELETE CASCADE,
-      doc_type TEXT, filename TEXT, blob_url TEXT, uploaded_at TIMESTAMP DEFAULT NOW()
-    )
-  `
+      <SouthsideTabs />
+
+      <LedgerRangeControls from={from} to={to} />
+
+      <LedgerView
+        rows={rows as LedgerRow[]}
+        properties={properties as { id: number; name: string }[]}
+        showProperty={true}
+      />
+
+      <p className="mt-4 text-xs text-gray-400">
+        Showing {from} to {to}. Add <code>?from=YYYY-MM-DD&amp;to=YYYY-MM-DD</code> to change the window.
+      </p>
+    </div>
+  )
 }
