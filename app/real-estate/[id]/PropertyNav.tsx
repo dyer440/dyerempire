@@ -45,6 +45,7 @@ export default function PropertyNav({
           </div>
         </div>
         <div className="flex items-center gap-5">
+          {canEdit && <Link href="/real-estate/southside" className={upCls}>Southside</Link>}
           <Link href="/real-estate" className={upCls}>All Properties</Link>
           <Link href="/" className={upCls}>Home</Link>
         </div>
