@@ -1,113 +1,36 @@
-// lib/recurring.ts  (UPDATED — generator skips closed periods)
+// lib/ledger-guard.ts
+// Self-contained access helpers for the unified ledger + Southside page.
+// Kept independent of lib/access.ts on purpose so it can't break the build if
+// that file's signatures change. If you prefer, swap getEditorEmail() for your
+// existing canEdit() — the role rule (admin/manager can edit) is identical.
+import { auth } from '@clerk/nextjs/server'
 import sql from './db'
 
-export type Frequency = 'monthly' | 'quarterly' | 'semiannual' | 'annual'
-
-export const FREQUENCIES: Frequency[] = ['monthly', 'quarterly', 'semiannual', 'annual']
-
-const DEFAULT_MONTHS: Record<Frequency, number[]> = {
-  monthly: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-  quarterly: [1, 4, 7, 10],
-  semiannual: [3, 9],
-  annual: [1],
-}
-
-const HORIZON_MONTHS = 12
-
-type ScheduleRow = {
-  id: number
-  property_id: number
-  unit_id: number | null
-  type: string
-  category: string
-  description: string | null
-  amount: string
-  is_estimate: boolean
-  frequency: Frequency
-  months_csv: string | null
-  day_of_month: number | null
-  start_date: string | null
-  end_date: string | null
-  status: string
-}
-
-function monthsFor(s: ScheduleRow): number[] {
-  if (s.months_csv && s.months_csv.trim()) {
-    return s.months_csv.split(',').map((x) => parseInt(x.trim(), 10)).filter((n) => n >= 1 && n <= 12)
-  }
-  return DEFAULT_MONTHS[s.frequency] || []
-}
-
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
+const ADMIN_EMAIL = 'david.dyer.24@gmail.com'
 
 /**
- * Regenerate forward forecast transactions for a property.
- * - Deletes future forecasts EXCEPT those inside a closed period.
- * - Re-creates forecasts for every active schedule across the horizon,
- *   skipping any date that falls inside a closed period.
- * - NEVER touches status='actual' rows.
+ * Returns the signed-in user's email IFF they may edit the books
+ * (admin or manager). Returns null for partners/viewers/anonymous.
  */
-export async function generateForecasts(propertyId: number): Promise<number> {
-  // Wipe future forecasts, but leave closed periods alone.
-  await sql`
-    DELETE FROM transactions
+export async function getEditorEmail(): Promise<string | null> {
+  const { sessionClaims } = await auth()
+  const email = (sessionClaims as Record<string, any> | null)?.email as string | undefined
+  if (!email) return null
+  if (email === ADMIN_EMAIL) return email
+  const rows = (await sql`
+    SELECT role FROM allowed_users WHERE email = ${email} LIMIT 1
+  `) as Record<string, any>[]
+  const role = rows[0]?.role
+  return role === 'admin' || role === 'manager' ? email : null
+}
+
+/** True if the given date falls inside a closed (soft-locked) period for the property. */
+export async function isDateClosed(propertyId: number, dateStr: string): Promise<boolean> {
+  const rows = (await sql`
+    SELECT 1 FROM period_closes
     WHERE property_id = ${propertyId}
-      AND status = 'forecast'
-      AND txn_date >= date_trunc('month', CURRENT_DATE)
-      AND NOT EXISTS (
-        SELECT 1 FROM period_closes pc
-        WHERE pc.property_id = ${propertyId}
-          AND transactions.txn_date BETWEEN pc.period_start AND pc.period_end
-      )
-  `
-
-  // Closed ranges (as YYYY-MM-DD strings for safe string comparison).
-  const closes = (await sql`
-    SELECT to_char(period_start, 'YYYY-MM-DD') AS ps, to_char(period_end, 'YYYY-MM-DD') AS pe
-    FROM period_closes WHERE property_id = ${propertyId}
-  `) as { ps: string; pe: string }[]
-  const isClosed = (d: string) => closes.some((c) => d >= c.ps && d <= c.pe)
-
-  const schedules = (await sql`
-    SELECT * FROM recurring_schedules
-    WHERE property_id = ${propertyId} AND status = 'active'
-  `) as ScheduleRow[]
-
-  const today = new Date()
-  const startYear = today.getFullYear()
-  const startMonthIdx = today.getMonth()
-  const firstOfMonth = `${startYear}-${pad(startMonthIdx + 1)}-01`
-
-  let created = 0
-
-  for (const s of schedules) {
-    const months = monthsFor(s)
-    if (months.length === 0) continue
-    const day = Math.min(s.day_of_month || 15, 28)
-    const amount = parseFloat(s.amount)
-
-    for (let i = 0; i < HORIZON_MONTHS; i++) {
-      const y = startYear + Math.floor((startMonthIdx + i) / 12)
-      const m = ((startMonthIdx + i) % 12) + 1
-      if (!months.includes(m)) continue
-
-      const dateStr = `${y}-${pad(m)}-${pad(day)}`
-      if (dateStr < firstOfMonth) continue
-      if (s.start_date && dateStr < s.start_date) continue
-      if (s.end_date && dateStr > s.end_date) continue
-      if (isClosed(dateStr)) continue
-
-      await sql`
-        INSERT INTO transactions
-          (property_id, unit_id, type, category, amount, txn_date, description, method, created_by, status)
-        VALUES (${propertyId}, ${s.unit_id}, ${s.type}, ${s.category}, ${amount}, ${dateStr},
-                ${s.description}, ${'scheduled'}, ${'schedule:' + s.id}, ${'forecast'})
-      `
-      created++
-    }
-  }
-
-  return created
+      AND ${dateStr}::date BETWEEN period_start AND period_end
+    LIMIT 1
+  `) as Record<string, any>[]
+  return rows.length > 0
 }
