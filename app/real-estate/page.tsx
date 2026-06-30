@@ -5,7 +5,7 @@ import Link from 'next/link'
 import sql from '@/lib/db'
 import { initDb } from '@/lib/init-db'
 import { seedRealEstate } from '@/lib/seed'
-import { getUserRole, canAccessRealEstate, getAccessibleProperties } from '@/lib/access'
+import { getUserRole, canAccessRealEstate, getAccessibleProperties, canEdit } from '@/lib/access'
 
 export default async function RealEstatePage() {
   await auth.protect()
@@ -53,6 +53,20 @@ export default async function RealEstatePage() {
             ← Home
           </Link>
         </div>
+
+        {canEdit(role) && (
+          <Link
+            href="/real-estate/southside"
+            className="block border border-white/15 px-6 py-4 mb-6 hover:bg-white/5 transition-colors"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-sm tracking-widest uppercase text-white/70" style={{ fontFamily: 'Georgia, serif' }}>
+                Southside Properties — entry &amp; reconciliation
+              </span>
+              <span className="text-white/30 text-xs tracking-widest uppercase">All properties · one list →</span>
+            </div>
+          </Link>
+        )}
 
         {properties.length === 0 && (
           <div className="border border-white/10 px-6 py-10 text-center text-white/30 text-sm tracking-widest uppercase">
