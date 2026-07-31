@@ -5,6 +5,7 @@
 // several, link it to an already-booked manual entry, or exclude it as personal.
 // Requires migrations/2026-07_import_infra.sql.
 import sql from '@/lib/db'
+import { cookies } from 'next/headers'
 import { getEditorEmail } from '@/lib/ledger-guard'
 import { displayName } from '@/lib/bank-import'
 import { uploadBankCsv } from './actions'
@@ -134,6 +135,15 @@ export default async function ImportPage() {
   `) as Record<string, any>[]
   const countOf = (s: string) => counts.find(c => c.status === s)?.n ?? 0
 
+  // One-shot upload summary set by uploadBankCsv(); read then clear it.
+  let summary: { parsed: number; inserted: number; duplicates: number } | null = null
+  const store = await cookies()
+  const raw = store.get('import_summary')?.value
+  if (raw) {
+    try { summary = JSON.parse(raw) } catch { summary = null }
+    store.delete('import_summary')
+  }
+
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <div>
@@ -164,6 +174,14 @@ export default async function ImportPage() {
           {countOf('pending')} pending · {countOf('posted')} posted · {countOf('linked')} linked · {countOf('excluded')} excluded
         </span>
       </form>
+
+      {summary && (
+        <div className="border border-green-300 bg-green-50 text-green-800 rounded p-3 text-sm">
+          Imported {summary.inserted} new row{summary.inserted === 1 ? '' : 's'}
+          {summary.duplicates > 0 && ` · skipped ${summary.duplicates} already-imported duplicate${summary.duplicates === 1 ? '' : 's'}`}
+          {` · ${summary.parsed} parsed`}
+        </div>
+      )}
 
       <ImportClient
         pending={pending}
