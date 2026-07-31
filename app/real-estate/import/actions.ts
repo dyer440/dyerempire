@@ -8,6 +8,7 @@ import sql from '@/lib/db'
 import { getEditorEmail, isDateClosed } from '@/lib/ledger-guard'
 import { parseUsBankCsv, withOccurrences, importHash } from '@/lib/bank-import'
 import { revalidatePath } from 'next/cache'
+import { cookies } from 'next/headers'
 
 const cents = (n: number) => Math.round(n * 100)
 
@@ -18,7 +19,9 @@ function refresh() {
 
 // ── Upload ────────────────────────────────────────────────────────────────────
 
-export async function uploadBankCsv(formData: FormData) {
+// Form action: must return void. The upload summary is stashed in a short-lived
+// cookie and rendered once on the next page load (see page.tsx).
+export async function uploadBankCsv(formData: FormData): Promise<void> {
   const editor = await getEditorEmail()
   if (!editor) throw new Error('Not authorized to import.')
 
@@ -45,8 +48,14 @@ export async function uploadBankCsv(formData: FormData) {
     `) as Record<string, any>[]
     if (res.length > 0) inserted++
   }
+
+  const store = await cookies()
+  store.set(
+    'import_summary',
+    JSON.stringify({ parsed: parsed.length, inserted, duplicates: parsed.length - inserted }),
+    { path: '/real-estate/import', maxAge: 30, httpOnly: false },
+  )
   refresh()
-  return { parsed: parsed.length, inserted, duplicates: parsed.length - inserted }
 }
 
 // ── Post (single target or splits — same action, 1..N legs) ──────────────────
