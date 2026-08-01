@@ -104,6 +104,7 @@ export async function initDb() {
     )
   `
   await sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL`
+  await sql`ALTER TABLE recurring_schedules ALTER COLUMN property_id DROP NOT NULL`
 
   // --- link transactions back to the schedule that spawned them ---
   // Enables: (a) confirming a scheduled row in place, and (b) the forecast
