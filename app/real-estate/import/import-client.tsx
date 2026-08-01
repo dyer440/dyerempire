@@ -7,6 +7,7 @@
 import { useState, useTransition } from 'react'
 import {
   postBankTxn, linkBankTxn, excludeBankTxn, revertBankTxn, createRule,
+  confirmForecastAndLink,
   type PostLeg,
 } from './actions'
 
@@ -16,6 +17,7 @@ export type Entity = { id: number; name: string }
 export type Candidate = {
   id: number; amount: number; txn_date: string; category: string
   type: string; description: string | null; property: string | null
+  status: string
 }
 export type Suggestion = {
   ruleId: number
@@ -137,8 +139,13 @@ export default function ImportClient({
           )}
           {orderedPending.map(row => {
             const s = row.suggestion
-            const confident = isConfident(s)
-            const accent = confident
+            const hasScheduled = row.candidates.some(c => c.status === 'forecast')
+            // A scheduled match must be CONFIRMED (not posted-over), so never
+            // offer the one-click accept when one exists — steer to the editor.
+            const confident = isConfident(s) && !hasScheduled
+            const accent = hasScheduled
+              ? 'border-l-4 border-l-emerald-400'
+              : confident
               ? (s!.kind === 'exclude' ? 'border-l-4 border-l-gray-300' : 'border-l-4 border-l-green-400')
               : s ? 'border-l-4 border-l-amber-300' : ''
             return (
@@ -162,8 +169,11 @@ export default function ImportClient({
                     </span>
                   )}
                   {row.candidates.length > 0 && (
-                    <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-1.5 py-0.5 whitespace-nowrap">
-                      {row.candidates.length} match{row.candidates.length > 1 ? 'es' : ''}
+                    <span className={`text-xs rounded px-1.5 py-0.5 border whitespace-nowrap ${
+                      hasScheduled ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-blue-50 text-blue-700 border-blue-200'
+                    }`}>
+                      {hasScheduled ? 'scheduled — confirm' : `${row.candidates.length} match${row.candidates.length > 1 ? 'es' : ''}`}
                     </span>
                   )}
                   {confident && (
@@ -423,27 +433,56 @@ function RowEditor({
         </button>
       </div>
 
-      {row.candidates.length > 0 && (
-        <div className="border rounded p-2 bg-blue-50/40">
-          <div className="text-xs font-semibold mb-1">Possible existing entries (link instead of posting to avoid double-counting):</div>
-          {row.candidates.map(c => (
-            <label key={c.id} className="flex items-center gap-2 text-xs py-0.5">
-              <input type="checkbox" checked={linkIds.includes(c.id)}
-                     onChange={e => setLinkIds(ids => e.target.checked ? [...ids, c.id] : ids.filter(x => x !== c.id))} />
-              <span className="text-gray-500">{c.txn_date}</span>
-              <span>{c.property || 'entity-level'}</span>
-              <span>· {c.category}</span>
-              <span className="text-gray-500 truncate">{c.description}</span>
-              <span className="ml-auto whitespace-nowrap">{money(c.amount)}</span>
-            </label>
-          ))}
-          <button disabled={busy || linkIds.length === 0}
-                  className="mt-1 border rounded px-3 py-1 text-xs hover:bg-white disabled:opacity-40"
-                  onClick={() => run(() => linkBankTxn(row.id, linkIds))}>
-            Link selected ({linkIds.length})
-          </button>
-        </div>
-      )}
+      {row.candidates.length > 0 && (() => {
+        const scheduled = row.candidates.filter(c => c.status === 'forecast')
+        const existing = row.candidates.filter(c => c.status !== 'forecast')
+        return (
+          <div className="space-y-2">
+            {scheduled.length > 0 && (
+              <div className="border rounded p-2 bg-emerald-50/50">
+                <div className="text-xs font-semibold mb-1">
+                  Matches a scheduled item — confirm it instead of posting (books the schedule, no duplicate):
+                </div>
+                {scheduled.map(c => (
+                  <div key={c.id} className="flex items-center gap-2 text-xs py-0.5">
+                    <span className="text-gray-500">{c.txn_date}</span>
+                    <span>{c.property || 'entity-level'}</span>
+                    <span>· {c.category}</span>
+                    <span className="text-gray-500 truncate">{c.description}</span>
+                    <span className="whitespace-nowrap">{money(c.amount)}</span>
+                    <button disabled={busy}
+                            className="ml-auto border rounded px-2 py-0.5 bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40"
+                            onClick={() => run(() => confirmForecastAndLink(row.id, c.id))}>
+                      Confirm &amp; link
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {existing.length > 0 && (
+              <div className="border rounded p-2 bg-blue-50/40">
+                <div className="text-xs font-semibold mb-1">Possible existing entries (link instead of posting to avoid double-counting):</div>
+                {existing.map(c => (
+                  <label key={c.id} className="flex items-center gap-2 text-xs py-0.5">
+                    <input type="checkbox" checked={linkIds.includes(c.id)}
+                           onChange={e => setLinkIds(ids => e.target.checked ? [...ids, c.id] : ids.filter(x => x !== c.id))} />
+                    <span className="text-gray-500">{c.txn_date}</span>
+                    <span>{c.property || 'entity-level'}</span>
+                    <span>· {c.category}</span>
+                    <span className="text-gray-500 truncate">{c.description}</span>
+                    <span className="ml-auto whitespace-nowrap">{money(c.amount)}</span>
+                  </label>
+                ))}
+                <button disabled={busy || linkIds.length === 0}
+                        className="mt-1 border rounded px-3 py-1 text-xs hover:bg-white disabled:opacity-40"
+                        onClick={() => run(() => linkBankTxn(row.id, linkIds))}>
+                  Link selected ({linkIds.length})
+                </button>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       <datalist id="import-cats">
         {categories.map(c => <option key={c} value={c} />)}
