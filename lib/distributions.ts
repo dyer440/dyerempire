@@ -65,6 +65,7 @@ export async function computeQuarter(propertyId: number, period: string): Promis
     FROM transactions WHERE property_id = ${propertyId}
       AND (status = 'actual' OR (status = 'forecast' AND txn_date >= date_trunc('month', CURRENT_DATE)))
       AND txn_date BETWEEN ${start} AND ${end}
+      AND COALESCE(is_deposit, FALSE) = FALSE
     GROUP BY type, category
   `) as { type: string; category: string; total: number }[]
 
@@ -84,6 +85,7 @@ export async function computeQuarter(propertyId: number, period: string): Promis
     FROM transactions WHERE property_id = ${propertyId}
       AND status = 'forecast' AND txn_date >= date_trunc('month', CURRENT_DATE)
       AND txn_date BETWEEN ${start} AND ${end}
+      AND COALESCE(is_deposit, FALSE) = FALSE
     GROUP BY type
   `) as { type: string; total: number }[]
   let scheduledNet = 0
