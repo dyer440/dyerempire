@@ -28,6 +28,7 @@ export default async function RealEstatePage() {
     SELECT property_id, type, SUM(amount) AS total
     FROM transactions
     WHERE status = 'actual' AND EXTRACT(YEAR FROM txn_date) = ${year}
+      AND COALESCE(is_deposit, FALSE) = FALSE
     GROUP BY property_id, type
   `) as { property_id: number; type: string; total: string }[]
 
