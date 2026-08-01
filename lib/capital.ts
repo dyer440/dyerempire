@@ -56,6 +56,7 @@ export async function computeCapitalAccounts(propertyId: number): Promise<Capita
     SELECT EXTRACT(YEAR FROM txn_date)::int AS yr,
            COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END), 0)::float8 AS net
     FROM transactions WHERE property_id = ${propertyId} AND status = 'actual'
+      AND COALESCE(is_deposit, FALSE) = FALSE
     GROUP BY yr
   `) as { yr: number; net: number }[]
   for (const r of ledger) if (realNI[r.yr] === undefined) realNI[r.yr] = r.net
