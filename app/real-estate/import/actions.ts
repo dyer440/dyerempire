@@ -70,7 +70,7 @@ export type PostLeg = {
   isDeposit?: boolean     // security-deposit credits
 }
 
-export async function postBankTxn(bankTxnId: number, legs: PostLeg[]) {
+export async function postBankTxn(bankTxnId: number, legs: PostLeg[], ruleId?: number) {
   const editor = await getEditorEmail()
   if (!editor) throw new Error('Not authorized to post.')
   if (!legs || legs.length === 0) throw new Error('At least one leg is required.')
@@ -172,6 +172,12 @@ export async function postBankTxn(bankTxnId: number, legs: PostLeg[]) {
     SET status = 'posted', resolved_by = ${editor}, resolved_at = NOW()
     WHERE id = ${bankTxnId}
   `
+  if (ruleId) {
+    await sql`
+      UPDATE import_rules SET times_used = times_used + 1, last_used = NOW()
+      WHERE id = ${ruleId}
+    `
+  }
   refresh()
 }
 
@@ -213,7 +219,7 @@ export async function linkBankTxn(bankTxnId: number, transactionIds: number[]) {
 
 // ── Exclude (personal / not business) ────────────────────────────────────────
 
-export async function excludeBankTxn(bankTxnId: number, reason: string) {
+export async function excludeBankTxn(bankTxnId: number, reason: string, ruleId?: number) {
   const editor = await getEditorEmail()
   if (!editor) throw new Error('Not authorized.')
   const r = (reason || '').trim() || 'personal / not business'
@@ -223,6 +229,12 @@ export async function excludeBankTxn(bankTxnId: number, reason: string) {
         resolved_by = ${editor}, resolved_at = NOW()
     WHERE id = ${bankTxnId} AND status = 'pending'
   `
+  if (ruleId) {
+    await sql`
+      UPDATE import_rules SET times_used = times_used + 1, last_used = NOW()
+      WHERE id = ${ruleId}
+    `
+  }
   refresh()
 }
 
@@ -246,5 +258,63 @@ export async function revertBankTxn(bankTxnId: number) {
     SET status = 'pending', exclude_reason = NULL, resolved_by = NULL, resolved_at = NULL
     WHERE id = ${bankTxnId}
   `
+  refresh()
+}
+
+// ── Rules: remember-this (create) and forget (delete) ────────────────────────
+
+export type NewRule = {
+  pattern: string
+  amount?: number | null
+  appliesTo?: 'any' | 'debit' | 'credit'
+  targetKind: 'property' | 'entity' | 'exclude'
+  propertyId?: number | null
+  entityId?: number | null
+  category?: string | null
+  isRent?: boolean
+  unitId?: number | null
+  isDeposit?: boolean
+  excludeReason?: string | null
+  note?: string | null
+}
+
+export async function createRule(rule: NewRule) {
+  const editor = await getEditorEmail()
+  if (!editor) throw new Error('Not authorized.')
+
+  const pattern = (rule.pattern || '').trim().toUpperCase()
+  const amount = rule.amount == null ? null : Math.abs(Number(rule.amount))
+  if (!pattern && amount == null) throw new Error('A rule needs a name pattern or an amount to match on.')
+  if (!['property', 'entity', 'exclude'].includes(rule.targetKind)) throw new Error('Bad rule target.')
+
+  // Guard against an exact duplicate (pattern + amount + applies_to).
+  const appliesTo = rule.appliesTo || 'any'
+  const dup = (await sql`
+    SELECT 1 FROM import_rules
+    WHERE pattern = ${pattern}
+      AND amount IS NOT DISTINCT FROM ${amount}
+      AND applies_to = ${appliesTo}
+    LIMIT 1
+  `) as Record<string, any>[]
+  if (dup.length > 0) return // already have this rule; silently succeed
+
+  await sql`
+    INSERT INTO import_rules
+      (pattern, amount, applies_to, target_kind, property_id, entity_id,
+       category, is_rent, unit_id, is_deposit, exclude_reason, note, created_by)
+    VALUES
+      (${pattern}, ${amount}, ${appliesTo}, ${rule.targetKind},
+       ${rule.propertyId ?? null}, ${rule.entityId ?? null},
+       ${rule.category ?? null}, ${rule.isRent ?? false}, ${rule.unitId ?? null},
+       ${rule.isDeposit ?? false}, ${rule.excludeReason ?? null}, ${rule.note ?? null},
+       ${editor})
+  `
+  refresh()
+}
+
+export async function deleteRule(ruleId: number) {
+  const editor = await getEditorEmail()
+  if (!editor) throw new Error('Not authorized.')
+  await sql`DELETE FROM import_rules WHERE id = ${ruleId}`
   refresh()
 }
