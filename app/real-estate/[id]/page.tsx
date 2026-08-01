@@ -72,6 +72,7 @@ export default async function PropertyPage({
     FROM transactions
     WHERE property_id = ${propertyId} AND status = 'actual'
       AND EXTRACT(YEAR FROM txn_date) = ${year}
+      AND COALESCE(is_deposit, FALSE) = FALSE
     GROUP BY type
   `) as { type: string; total: number }[]
   let incomeYtd = 0, expenseYtd = 0
@@ -83,11 +84,21 @@ export default async function PropertyPage({
     SELECT type, COALESCE(SUM(amount), 0)::float8 AS total
     FROM transactions
     WHERE property_id = ${propertyId} AND status = 'forecast'
+      AND COALESCE(is_deposit, FALSE) = FALSE
     GROUP BY type
   `) as { type: string; total: number }[]
   let projIncome = 0, projExpense = 0
   for (const r of proj) { if (r.type === 'income') projIncome = r.total; else projExpense = r.total }
   const projNet = projIncome - projExpense
+
+  // ---- Deposits held (liability) — excluded from P&L above; shown separately.
+  // Net of returns: a collection is income+is_deposit, a return is expense+is_deposit.
+  const depRows = (await sql`
+    SELECT COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END), 0)::float8 AS held
+    FROM transactions
+    WHERE property_id = ${propertyId} AND status = 'actual' AND COALESCE(is_deposit, FALSE) = TRUE
+  `) as { held: number }[]
+  const depositsHeld = depRows[0]?.held || 0
 
   // ---- One ledger: actuals + scheduled, filtered to range, sorted chronologically ----
   const rows = (await sql`
@@ -214,6 +225,14 @@ export default async function PropertyPage({
             {fmt(projNet)}
           </div>
         </div>
+
+        {/* Deposits held — a liability, not income. Excluded from all P&L above. */}
+        {depositsHeld > 0 && (
+          <div className="border border-white/10 p-4 mb-8 flex items-center justify-between">
+            <div className="text-white/40 text-xs tracking-widest uppercase">Deposits held · liability (excluded from income)</div>
+            <div className="text-lg text-white/70" style={{ fontFamily: 'Georgia, serif' }}>{fmt(depositsHeld)}</div>
+          </div>
+        )}
 
         {/* Add transaction (editors only) */}
         {editable && (
