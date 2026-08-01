@@ -5,7 +5,10 @@
 // editors. Shows only entity-level rows (entity_id set, property_id NULL).
 import sql from '@/lib/db'
 import { getEditorEmail } from '@/lib/ledger-guard'
-import { addEntityTransaction, deleteEntityTransaction } from './actions'
+import {
+  addEntityTransaction, deleteEntityTransaction,
+  addEntitySchedule, deleteEntitySchedule, regenerateEntityForecasts, confirmEntityForecast,
+} from './actions'
 import Link from 'next/link'
 
 export const dynamic = 'force-dynamic'
@@ -74,8 +77,30 @@ export default async function EntityLedgerPage({
   const editor = await getEditorEmail()
   const today = new Date().toISOString().slice(0, 10)
 
+  // Upcoming scheduled items (forecasts) — next ~90 days, soonest first.
+  const upcoming = (await sql`
+    SELECT t.id, t.type, t.amount::float8 AS amount, t.category,
+           to_char(t.txn_date, 'YYYY-MM-DD') AS txn_date, t.description
+    FROM transactions t
+    WHERE t.entity_id = ${entity.id} AND t.property_id IS NULL
+      AND t.status = 'forecast'
+      AND t.txn_date <= (CURRENT_DATE + INTERVAL '90 days')
+    ORDER BY t.txn_date ASC, t.id ASC
+  `) as Record<string, any>[]
+
+  const schedules = (await sql`
+    SELECT id, type, category, description, amount::float8 AS amount, frequency, day_of_month, status
+    FROM recurring_schedules
+    WHERE entity_id = ${entity.id} AND property_id IS NULL
+    ORDER BY status, category
+  `) as Record<string, any>[]
+
   const addAction = addEntityTransaction.bind(null, slug)
   const deleteAction = deleteEntityTransaction.bind(null, slug)
+  const addSchedAction = addEntitySchedule.bind(null, slug)
+  const deleteSchedAction = deleteEntitySchedule.bind(null, slug)
+  const confirmAction = confirmEntityForecast.bind(null, slug)
+  const regenAction = regenerateEntityForecasts.bind(null, slug)
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
@@ -159,6 +184,101 @@ export default async function EntityLedgerPage({
           </label>
           <button type="submit" className="border rounded px-3 py-1.5 bg-gray-900 text-white hover:bg-gray-700">Add</button>
         </form>
+      )}
+
+      {/* Upcoming scheduled items — confirm each into an actual as it's charged */}
+      {upcoming.length > 0 && (
+        <div className="border rounded p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-semibold">Upcoming (scheduled)</h2>
+            {editor && (
+              <form action={regenAction}>
+                <button type="submit" className="text-xs border rounded px-2 py-1 hover:bg-gray-50">Regenerate</button>
+              </form>
+            )}
+          </div>
+          <div className="divide-y">
+            {upcoming.map(u => (
+              <div key={u.id} className="py-2 flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-gray-500 whitespace-nowrap">{u.txn_date}</span>
+                <span className="flex-1 min-w-[8rem]">{u.category}{u.description ? ` · ${u.description}` : ''}</span>
+                <span className={`whitespace-nowrap ${u.type === 'expense' ? '' : 'text-green-700'}`}>
+                  {u.type === 'expense' ? '−' : '+'}{money(u.amount)}
+                </span>
+                {editor && (
+                  <form action={confirmAction} className="flex items-center gap-1">
+                    <input type="hidden" name="id" value={u.id} />
+                    <input type="number" name="actual_amount" step="0.01" min="0.01"
+                           defaultValue={u.amount.toFixed(2)} className="border rounded px-1 py-0.5 w-24 text-right" />
+                    <input type="date" name="actual_date" defaultValue={u.txn_date} className="border rounded px-1 py-0.5" />
+                    <button type="submit" className="text-xs border rounded px-2 py-1 bg-gray-900 text-white hover:bg-gray-700">Confirm</button>
+                  </form>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recurring schedules manager */}
+      {editor && (
+        <details className="border rounded p-4">
+          <summary className="text-sm font-semibold cursor-pointer">
+            Recurring schedules ({schedules.filter(s => s.status === 'active').length} active)
+          </summary>
+          <div className="mt-3 space-y-3">
+            {schedules.length > 0 && (
+              <div className="divide-y text-sm">
+                {schedules.map(s => (
+                  <div key={s.id} className="py-1.5 flex items-center gap-2">
+                    <span className={`flex-1 ${s.status !== 'active' ? 'text-gray-400 line-through' : ''}`}>
+                      {s.category}{s.description ? ` · ${s.description}` : ''} — {s.frequency}, day {s.day_of_month}
+                    </span>
+                    <span className={s.type === 'expense' ? '' : 'text-green-700'}>
+                      {s.type === 'expense' ? '−' : '+'}{money(s.amount)}
+                    </span>
+                    <form action={deleteSchedAction}>
+                      <input type="hidden" name="id" value={s.id} />
+                      <button type="submit" className="text-xs text-red-600 hover:underline">delete</button>
+                    </form>
+                  </div>
+                ))}
+              </div>
+            )}
+            <form action={addSchedAction} className="grid grid-cols-2 sm:grid-cols-6 gap-2 items-end text-sm border-t pt-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">Type</span>
+                <select name="type" defaultValue="expense" className="border rounded px-2 py-1">
+                  <option value="expense">Expense</option><option value="income">Income</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">Category</span>
+                <input name="category" required placeholder="Software" className="border rounded px-2 py-1" />
+              </label>
+              <label className="flex flex-col gap-1 col-span-2 sm:col-span-1">
+                <span className="text-xs text-gray-500">Description</span>
+                <input name="description" placeholder="OpenAI, TradingView…" className="border rounded px-2 py-1" />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">Amount</span>
+                <input type="number" name="amount" step="0.01" min="0.01" required className="border rounded px-2 py-1" />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">Frequency</span>
+                <select name="frequency" defaultValue="monthly" className="border rounded px-2 py-1">
+                  <option value="monthly">Monthly</option><option value="quarterly">Quarterly</option>
+                  <option value="semiannual">Semiannual</option><option value="annual">Annual</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">Day</span>
+                <input type="number" name="day_of_month" min="1" max="28" defaultValue={15} className="border rounded px-2 py-1" />
+              </label>
+              <button type="submit" className="border rounded px-3 py-1.5 hover:bg-gray-50 col-span-2 sm:col-span-1">Add schedule</button>
+            </form>
+          </div>
+        </details>
       )}
 
       <div className="border rounded overflow-x-auto">
