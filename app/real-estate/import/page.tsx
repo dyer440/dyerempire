@@ -58,17 +58,19 @@ export default async function ImportPage() {
   const candidatesRaw = (await sql`
     SELECT b.id AS bank_id, t.id, t.amount::float8 AS amount,
            to_char(t.txn_date, 'YYYY-MM-DD') AS txn_date,
-           t.category, t.type, t.description, p.name AS property
+           t.category, t.type, t.description, t.status,
+           COALESCE(p.name, e.name) AS holder
     FROM bank_txns b
     JOIN transactions t
       ON t.amount = ABS(b.amount)
      AND t.txn_date BETWEEN b.txn_date - 5 AND b.txn_date + 5
-     AND t.status = 'actual'
+     AND t.status IN ('actual', 'forecast')
      AND ((b.amount > 0 AND t.type = 'income') OR (b.amount < 0 AND t.type = 'expense'))
     LEFT JOIN properties p ON p.id = t.property_id
+    LEFT JOIN entities e ON e.id = t.entity_id AND t.property_id IS NULL
     WHERE b.status = 'pending'
       AND NOT EXISTS (SELECT 1 FROM bank_txn_legs l WHERE l.transaction_id = t.id)
-    ORDER BY t.txn_date
+    ORDER BY t.status DESC, t.txn_date
   `) as Record<string, any>[]
 
   const candidatesByBank = new Map<number, Candidate[]>()
@@ -76,7 +78,7 @@ export default async function ImportPage() {
     const list = candidatesByBank.get(c.bank_id) || []
     list.push({
       id: c.id, amount: c.amount, txn_date: c.txn_date, category: c.category,
-      type: c.type, description: c.description, property: c.property,
+      type: c.type, description: c.description, property: c.holder, status: c.status,
     })
     candidatesByBank.set(c.bank_id, list)
   }
