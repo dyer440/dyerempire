@@ -166,7 +166,8 @@ export default async function ImportPage() {
         <p className="text-sm text-gray-500">
           Upload a bank CSV, then assign each row to the right books. Re-uploading an
           overlapping export is safe — duplicates are skipped automatically.{' '}
-          <Link href="/real-estate/import/reconcile" className="underline">Fee reconciliation →</Link>
+          <Link href="/real-estate/import/reconcile" className="underline">Fee reconciliation →</Link>{' '}
+          <Link href="/real-estate/import/distribute" className="underline">Distribute fees →</Link>
         </p>
       </div>
 
