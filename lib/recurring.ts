@@ -125,3 +125,69 @@ export async function generateForecasts(propertyId: number): Promise<number> {
 
   return created
 }
+
+/**
+ * Entity-level twin of generateForecasts, for non-property entities (SL Cap
+ * Mgmt, SL Trading, SL Media). Schedules are keyed by entity_id with
+ * property_id NULL; generated forecasts carry entity_id and property_id NULL.
+ * There are no period_closes for entities, so that logic is omitted; everything
+ * else — horizon, confirmed-month skipping, schedule_id stamping — matches the
+ * property path so confirm-in-place works identically.
+ */
+export async function generateEntityForecasts(entityId: number): Promise<number> {
+  await sql`
+    DELETE FROM transactions
+    WHERE entity_id = ${entityId} AND property_id IS NULL
+      AND status = 'forecast'
+      AND txn_date >= date_trunc('month', CURRENT_DATE)
+  `
+
+  const confirmed = (await sql`
+    SELECT schedule_id, to_char(txn_date, 'YYYY-MM') AS ym
+    FROM transactions
+    WHERE entity_id = ${entityId} AND property_id IS NULL
+      AND status = 'actual' AND schedule_id IS NOT NULL
+  `) as { schedule_id: number; ym: string }[]
+  const confirmedSet = new Set(confirmed.map((c) => `${c.schedule_id}:${c.ym}`))
+
+  const schedules = (await sql`
+    SELECT * FROM recurring_schedules
+    WHERE entity_id = ${entityId} AND property_id IS NULL AND status = 'active'
+  `) as ScheduleRow[]
+
+  const today = new Date()
+  const startYear = today.getFullYear()
+  const startMonthIdx = today.getMonth()
+  const firstOfMonth = `${startYear}-${pad(startMonthIdx + 1)}-01`
+
+  let created = 0
+
+  for (const s of schedules) {
+    const months = monthsFor(s)
+    if (months.length === 0) continue
+    const day = Math.min(s.day_of_month || 15, 28)
+    const amount = parseFloat(s.amount)
+
+    for (let i = 0; i < HORIZON_MONTHS; i++) {
+      const y = startYear + Math.floor((startMonthIdx + i) / 12)
+      const m = ((startMonthIdx + i) % 12) + 1
+      if (!months.includes(m)) continue
+
+      const dateStr = `${y}-${pad(m)}-${pad(day)}`
+      if (dateStr < firstOfMonth) continue
+      if (s.start_date && dateStr < s.start_date) continue
+      if (s.end_date && dateStr > s.end_date) continue
+      if (confirmedSet.has(`${s.id}:${y}-${pad(m)}`)) continue
+
+      await sql`
+        INSERT INTO transactions
+          (property_id, unit_id, entity_id, type, category, amount, txn_date, description, method, created_by, status, schedule_id)
+        VALUES (NULL, NULL, ${entityId}, ${s.type}, ${s.category}, ${amount}, ${dateStr},
+                ${s.description}, ${'scheduled'}, ${'schedule:' + s.id}, ${'forecast'}, ${s.id})
+      `
+      created++
+    }
+  }
+
+  return created
+}
