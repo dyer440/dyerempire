@@ -5,7 +5,10 @@
 // of it). One expandable editor per pending row: Post (1 leg), Split (N legs),
 // Link (tie to pre-existing ledger rows), or Exclude (personal).
 import { useState, useTransition } from 'react'
-import { postBankTxn, linkBankTxn, excludeBankTxn, revertBankTxn, type PostLeg } from './actions'
+import {
+  postBankTxn, linkBankTxn, excludeBankTxn, revertBankTxn, createRule,
+  type PostLeg,
+} from './actions'
 
 export type Property = { id: number; name: string }
 export type Unit = { id: number; property_id: number; label: string }
@@ -14,9 +17,22 @@ export type Candidate = {
   id: number; amount: number; txn_date: string; category: string
   type: string; description: string | null; property: string | null
 }
+export type Suggestion = {
+  ruleId: number
+  kind: 'post' | 'exclude'
+  target?: string
+  category?: string
+  isRent?: boolean
+  unitId?: number | null
+  isDeposit?: boolean
+  needsProperty?: boolean
+  reason?: string
+  note?: string | null
+}
 export type PendingRow = {
   id: number; txn_date: string; amount: number; display: string
-  memo: string | null; candidates: Candidate[]
+  name_norm: string; is_check: boolean
+  memo: string | null; candidates: Candidate[]; suggestion: Suggestion | null
 }
 export type ResolvedRow = {
   id: number; txn_date: string; amount: number; display: string
@@ -54,6 +70,52 @@ export default function ImportClient({
     })
   }
 
+  const targetLabel = (target?: string) => {
+    if (!target) return ''
+    const m = /^(property|entity):(\d+)$/.exec(target)
+    if (!m) return target
+    const id = Number(m[2])
+    return m[1] === 'entity'
+      ? entities.find(e => e.id === id)?.name ?? target
+      : properties.find(p => p.id === id)?.name ?? target
+  }
+
+  // A suggestion is "confident" (one-click) when it's an exclude, or a post
+  // that already knows its destination. Category-only hints still need a pick.
+  const isConfident = (s: Suggestion | null) =>
+    !!s && (s.kind === 'exclude' || (s.kind === 'post' && !!s.target && !s.needsProperty))
+
+  const suggestionText = (s: Suggestion) => {
+    if (s.kind === 'exclude') return `Exclude — ${s.reason}`
+    const dest = targetLabel(s.target)
+    if (s.isRent) return `Rent → ${dest}`
+    if (s.needsProperty) return `${s.category} — pick property`
+    return `${dest} · ${s.category}`
+  }
+
+  const acceptSuggestion = (row: PendingRow) => {
+    const s = row.suggestion!
+    if (s.kind === 'exclude') {
+      return run(() => excludeBankTxn(row.id, s.reason || 'excluded', s.ruleId))
+    }
+    const leg: PostLeg = {
+      target: s.target!,
+      amount: Math.abs(row.amount),
+      category: s.isRent ? 'Rental Income' : s.category || '',
+      unitId: s.isRent && s.unitId ? s.unitId : undefined,
+      rentalPeriod: s.isRent ? row.txn_date.slice(0, 7) : undefined,
+      isDeposit: s.isDeposit,
+    }
+    return run(() => postBankTxn(row.id, [leg], s.ruleId))
+  }
+
+  // Sort: confident suggestions first (fast skim-and-accept), then hints, then unmatched.
+  const orderedPending = [...pending].sort((a, b) => {
+    const rank = (r: PendingRow) => (isConfident(r.suggestion) ? 0 : r.suggestion ? 1 : 2)
+    return rank(a) - rank(b) || a.txn_date.localeCompare(b.txn_date)
+  })
+  const confidentCount = pending.filter(r => isConfident(r.suggestion)).length
+
   return (
     <div className="space-y-6">
       {error && (
@@ -63,39 +125,72 @@ export default function ImportClient({
       <section>
         <h2 className="text-sm font-semibold mb-2">
           Needs assignment <span className="text-gray-500 font-normal">({pending.length})</span>
+          {confidentCount > 0 && (
+            <span className="ml-2 text-xs text-green-700 font-normal">
+              {confidentCount} suggested — review &amp; accept
+            </span>
+          )}
         </h2>
         <div className="border rounded divide-y">
           {pending.length === 0 && (
             <div className="p-4 text-sm text-gray-500">Nothing pending — upload a CSV above.</div>
           )}
-          {pending.map(row => (
-            <div key={row.id} className="p-3">
-              <div className="flex items-center gap-3 text-sm">
-                <span className="text-gray-500 whitespace-nowrap">{row.txn_date}</span>
-                <span className="flex-1 truncate" title={row.memo || undefined}>{row.display}</span>
-                <span className={`whitespace-nowrap font-medium ${row.amount < 0 ? '' : 'text-green-700'}`}>
-                  {row.amount < 0 ? '−' : '+'}{money(row.amount)}
-                </span>
-                {row.candidates.length > 0 && (
-                  <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-1.5 py-0.5 whitespace-nowrap">
-                    {row.candidates.length} match{row.candidates.length > 1 ? 'es' : ''}
+          {orderedPending.map(row => {
+            const s = row.suggestion
+            const confident = isConfident(s)
+            const accent = confident
+              ? (s!.kind === 'exclude' ? 'border-l-4 border-l-gray-300' : 'border-l-4 border-l-green-400')
+              : s ? 'border-l-4 border-l-amber-300' : ''
+            return (
+              <div key={row.id} className={`p-3 ${accent}`}>
+                <div className="flex items-center gap-3 text-sm">
+                  <span className="text-gray-500 whitespace-nowrap">{row.txn_date}</span>
+                  <span className="flex-1 truncate" title={row.memo || undefined}>{row.display}</span>
+                  <span className={`whitespace-nowrap font-medium ${row.amount < 0 ? '' : 'text-green-700'}`}>
+                    {row.amount < 0 ? '−' : '+'}{money(row.amount)}
                   </span>
+                  {s && (
+                    <span
+                      className={`text-xs rounded px-1.5 py-0.5 border whitespace-nowrap ${
+                        s.kind === 'exclude' ? 'bg-gray-50 text-gray-600 border-gray-200'
+                        : s.needsProperty ? 'bg-amber-50 text-amber-700 border-amber-200'
+                        : 'bg-green-50 text-green-700 border-green-200'
+                      }`}
+                      title={s.note || undefined}
+                    >
+                      {suggestionText(s)}
+                    </span>
+                  )}
+                  {row.candidates.length > 0 && (
+                    <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-1.5 py-0.5 whitespace-nowrap">
+                      {row.candidates.length} match{row.candidates.length > 1 ? 'es' : ''}
+                    </span>
+                  )}
+                  {confident && (
+                    <button
+                      className="text-xs border rounded px-2 py-1 bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-40"
+                      disabled={isPending}
+                      onClick={() => acceptSuggestion(row)}
+                    >
+                      Accept
+                    </button>
+                  )}
+                  <button
+                    className="text-xs border rounded px-2 py-1 hover:bg-gray-50"
+                    onClick={() => setOpenId(openId === row.id ? null : row.id)}
+                  >
+                    {openId === row.id ? 'Close' : confident ? 'Edit' : 'Assign'}
+                  </button>
+                </div>
+                {openId === row.id && (
+                  <RowEditor
+                    row={row} properties={properties} units={units} entities={entities}
+                    categories={categories} busy={isPending} run={run}
+                  />
                 )}
-                <button
-                  className="text-xs border rounded px-2 py-1 hover:bg-gray-50"
-                  onClick={() => setOpenId(openId === row.id ? null : row.id)}
-                >
-                  {openId === row.id ? 'Close' : 'Assign'}
-                </button>
               </div>
-              {openId === row.id && (
-                <RowEditor
-                  row={row} properties={properties} units={units} entities={entities}
-                  categories={categories} busy={isPending} run={run}
-                />
-              )}
-            </div>
-          ))}
+            )
+          })}
         </div>
       </section>
 
@@ -141,8 +236,25 @@ function RowEditor({
 }) {
   const isCredit = row.amount > 0
   const defaultPeriod = row.txn_date.slice(0, 7)
-  const [legs, setLegs] = useState<LegDraft[]>([blankLeg(Math.abs(row.amount), defaultPeriod)])
+  const s = row.suggestion
+  // Pre-fill the first leg from a post-suggestion (rent or expense) if present.
+  const seededLeg: LegDraft = (() => {
+    const base = blankLeg(Math.abs(row.amount), defaultPeriod)
+    if (s && s.kind === 'post') {
+      return {
+        ...base,
+        target: s.target || '',
+        category: s.isRent ? '' : s.category || '',
+        isRent: !!s.isRent,
+        unitId: s.unitId ? String(s.unitId) : '',
+        isDeposit: !!s.isDeposit,
+      }
+    }
+    return base
+  })()
+  const [legs, setLegs] = useState<LegDraft[]>([seededLeg])
   const [linkIds, setLinkIds] = useState<number[]>([])
+  const [remember, setRemember] = useState(false)
   const legSum = legs.reduce((s, l) => s + (Number(l.amount) || 0), 0)
   const sumOk = Math.round(legSum * 100) === Math.round(Math.abs(row.amount) * 100)
 
@@ -159,6 +271,32 @@ function RowEditor({
       rentalPeriod: l.isRent ? l.rentalPeriod : undefined,
       isDeposit: l.isDeposit,
     }))
+
+  // A check number never recurs, so a check's rule keys on amount alone (the
+  // fire fees identify by amount); everything else keys on the counterparty.
+  const ruleKeyFor = (r: PendingRow): { pattern: string; amount: number | null } =>
+    r.is_check
+      ? { pattern: '', amount: Math.abs(r.amount) }
+      : { pattern: r.name_norm, amount: null }
+
+  // Turn a single-leg assignment into a rule mirroring that disposition.
+  const maybeCreateRuleFromLeg = async (r: PendingRow, leg: LegDraft) => {
+    const m = /^(property|entity):(\d+)$/.exec(leg.target)
+    if (!m) return
+    const appliesTo: 'debit' | 'credit' = r.amount > 0 ? 'credit' : 'debit'
+    await createRule({
+      ...ruleKeyFor(r),
+      appliesTo,
+      targetKind: m[1] === 'entity' ? 'entity' : 'property',
+      propertyId: m[1] === 'property' ? Number(m[2]) : null,
+      entityId: m[1] === 'entity' ? Number(m[2]) : null,
+      category: leg.isRent ? 'Rental Income' : leg.category || null,
+      isRent: leg.isRent,
+      unitId: leg.isRent && leg.unitId ? Number(leg.unitId) : null,
+      isDeposit: leg.isDeposit,
+      note: `learned from "${r.display}"`,
+    })
+  }
 
   return (
     <div className="mt-3 border-t pt-3 space-y-3 text-sm">
@@ -243,9 +381,23 @@ function RowEditor({
         </div>
       )}
 
+      {/* Remember-this: only offered for a single-leg assignment (splits vary
+          per transaction, so they don't generalize into a rule). The pattern
+          is the counterparty; amount is included when it's the identifying
+          signal (e.g. the per-property fire fees). */}
+      {legs.length === 1 && (
+        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+          <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
+          Remember: auto-suggest “{row.display}” next time
+        </label>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         <button disabled={busy || !sumOk} className="border rounded px-3 py-1.5 bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-40"
-                onClick={() => run(() => postBankTxn(row.id, buildLegs()))}>
+                onClick={() => run(async () => {
+                  await postBankTxn(row.id, buildLegs())
+                  if (remember && legs.length === 1) await maybeCreateRuleFromLeg(row, legs[0])
+                })}>
           Post{legs.length > 1 ? ` ${legs.length} legs` : ''}
         </button>
         <button disabled={busy} className="border rounded px-3 py-1.5 hover:bg-gray-50"
@@ -255,7 +407,17 @@ function RowEditor({
         <button disabled={busy} className="border rounded px-3 py-1.5 hover:bg-gray-50"
                 onClick={() => {
                   const reason = window.prompt('Exclude reason:', 'personal / not business')
-                  if (reason !== null) run(() => excludeBankTxn(row.id, reason))
+                  if (reason === null) return
+                  run(async () => {
+                    await excludeBankTxn(row.id, reason)
+                    if (remember) {
+                      await createRule({
+                        ...ruleKeyFor(row),
+                        targetKind: 'exclude', excludeReason: reason,
+                        note: `learned from "${row.display}"`,
+                      })
+                    }
+                  })
                 }}>
           Exclude
         </button>
