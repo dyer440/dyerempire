@@ -244,7 +244,8 @@ export async function revertBankTxn(bankTxnId: number) {
   const editor = await getEditorEmail()
   if (!editor) throw new Error('Not authorized.')
 
-  // Delete ledger rows this bank row CREATED; merely unlink pre-existing ones.
+  // Delete ledger rows this bank row CREATED; merely unlink pre-existing ones;
+  // send CONFIRMED forecasts back to forecast (the schedule owns them).
   const created = (await sql`
     SELECT transaction_id FROM bank_txn_legs
     WHERE bank_txn_id = ${bankTxnId} AND link_type = 'created' AND transaction_id IS NOT NULL
@@ -252,10 +253,69 @@ export async function revertBankTxn(bankTxnId: number) {
   for (const row of created) {
     await sql`DELETE FROM transactions WHERE id = ${row.transaction_id} AND method = 'import'`
   }
+  const confirmed = (await sql`
+    SELECT transaction_id FROM bank_txn_legs
+    WHERE bank_txn_id = ${bankTxnId} AND link_type = 'confirmed' AND transaction_id IS NOT NULL
+  `) as Record<string, any>[]
+  for (const row of confirmed) {
+    await sql`
+      UPDATE transactions SET status = 'forecast', method = 'scheduled'
+      WHERE id = ${row.transaction_id} AND status = 'actual' AND schedule_id IS NOT NULL
+    `
+  }
   await sql`DELETE FROM bank_txn_legs WHERE bank_txn_id = ${bankTxnId}`
   await sql`
     UPDATE bank_txns
     SET status = 'pending', exclude_reason = NULL, resolved_by = NULL, resolved_at = NULL
+    WHERE id = ${bankTxnId}
+  `
+  refresh()
+}
+
+// ── Confirm a scheduled forecast from a bank row ─────────────────────────────
+// When a bank row matches a scheduled (forecast) item, confirm that forecast
+// into an actual — adjusting amount/date to what actually cleared — and link the
+// bank row to it. This consumes the schedule's forecast (so Regenerate won't
+// re-create it) instead of posting a duplicate. Works for property fee schedules
+// and entity subscription schedules alike.
+export async function confirmForecastAndLink(bankTxnId: number, transactionId: number) {
+  const editor = await getEditorEmail()
+  if (!editor) throw new Error('Not authorized.')
+
+  const bankRows = (await sql`
+    SELECT id, to_char(txn_date, 'YYYY-MM-DD') AS txn_date,
+           amount::float8 AS amount, status FROM bank_txns WHERE id = ${bankTxnId}
+  `) as Record<string, any>[]
+  const bank = bankRows[0]
+  if (!bank) throw new Error('Bank row not found.')
+  if (bank.status !== 'pending') throw new Error('That row is already resolved — revert it first.')
+
+  const fRows = (await sql`
+    SELECT id, property_id, amount::float8 AS amount FROM transactions
+    WHERE id = ${transactionId} AND status = 'forecast' AND schedule_id IS NOT NULL
+  `) as Record<string, any>[]
+  const forecast = fRows[0]
+  if (!forecast) throw new Error('That scheduled item no longer exists as a forecast.')
+
+  const txnDate = String(bank.txn_date).slice(0, 10)
+  if (forecast.property_id && (await isDateClosed(forecast.property_id, txnDate))) {
+    throw new Error(`${txnDate} falls in a closed period for that property.`)
+  }
+
+  const amount = Math.abs(bank.amount)
+  await sql`
+    UPDATE transactions
+    SET status = 'actual', method = 'import', created_by = ${editor},
+        amount = ${amount}, txn_date = ${txnDate}::date
+    WHERE id = ${transactionId} AND status = 'forecast'
+  `
+  await sql`
+    INSERT INTO bank_txn_legs (bank_txn_id, transaction_id, link_type, amount)
+    VALUES (${bankTxnId}, ${transactionId}, 'confirmed', ${amount})
+  `
+  await sql`
+    UPDATE bank_txns
+    SET status = 'linked', resolved_by = ${editor}, resolved_at = NOW()
     WHERE id = ${bankTxnId}
   `
   refresh()
