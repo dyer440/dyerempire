@@ -8,7 +8,9 @@ import sql from '@/lib/db'
 import { cookies } from 'next/headers'
 import { getEditorEmail } from '@/lib/ledger-guard'
 import { displayName } from '@/lib/bank-import'
+import { bestRule, ruleToSuggestion, type ImportRule } from '@/lib/import-rules'
 import { uploadBankCsv } from './actions'
+import Link from 'next/link'
 import ImportClient, {
   type PendingRow, type ResolvedRow, type Candidate,
 } from './import-client'
@@ -79,14 +81,27 @@ export default async function ImportPage() {
     candidatesByBank.set(c.bank_id, list)
   }
 
-  const pending: PendingRow[] = pendingRaw.map(b => ({
-    id: b.id,
-    txn_date: b.txn_date,
-    amount: b.amount,
-    display: displayName({ nameRaw: b.name_raw, checkNumber: b.check_number, nameNorm: b.name_norm }),
-    memo: b.memo,
-    candidates: candidatesByBank.get(b.id) || [],
-  }))
+  const rules = (await sql`
+    SELECT id, pattern, amount::float8 AS amount, applies_to, target_kind,
+           property_id, entity_id, category, is_rent, unit_id, is_deposit,
+           exclude_reason, note
+    FROM import_rules
+  `) as ImportRule[]
+
+  const pending: PendingRow[] = pendingRaw.map(b => {
+    const rule = bestRule(rules, { amount: b.amount, name_norm: b.name_norm })
+    return {
+      id: b.id,
+      txn_date: b.txn_date,
+      amount: b.amount,
+      display: displayName({ nameRaw: b.name_raw, checkNumber: b.check_number, nameNorm: b.name_norm }),
+      name_norm: b.name_norm,
+      is_check: !!b.check_number,
+      memo: b.memo,
+      candidates: candidatesByBank.get(b.id) || [],
+      suggestion: rule ? ruleToSuggestion(rule) : null,
+    }
+  })
 
   const resolvedRaw = (await sql`
     SELECT b.id, to_char(b.txn_date, 'YYYY-MM-DD') AS txn_date,
@@ -150,7 +165,8 @@ export default async function ImportPage() {
         <h1 className="text-2xl font-semibold">Bank import</h1>
         <p className="text-sm text-gray-500">
           Upload a bank CSV, then assign each row to the right books. Re-uploading an
-          overlapping export is safe — duplicates are skipped automatically.
+          overlapping export is safe — duplicates are skipped automatically.{' '}
+          <Link href="/real-estate/import/reconcile" className="underline">Fee reconciliation →</Link>
         </p>
       </div>
 
