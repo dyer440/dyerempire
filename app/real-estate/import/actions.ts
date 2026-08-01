@@ -318,3 +318,71 @@ export async function deleteRule(ruleId: number) {
   await sql`DELETE FROM import_rules WHERE id = ${ruleId}`
   refresh()
 }
+
+// ── Batch post: the fee-distribute helper ────────────────────────────────────
+// Identical per-property micro-fees (Huntington Sanitary $7.15, City of
+// Huntington refuse $60) can't be told apart by counterparty or amount, but
+// each property pays exactly one per period — so distributing the month's rows
+// one-per-property books the right total per property even though a single
+// line's attribution is arbitrary. Each assignment posts the FULL bank amount
+// as one expense leg to its property; sums are trivially correct (1 row = 1 leg).
+
+export type FeeAssignment = { bankTxnId: number; propertyId: number; category: string }
+
+export async function postFeeBatch(assignments: FeeAssignment[]) {
+  const editor = await getEditorEmail()
+  if (!editor) throw new Error('Not authorized to post.')
+  if (!assignments || assignments.length === 0) throw new Error('Nothing to post.')
+
+  // Preload property ids → entity ids once.
+  const props = (await sql`SELECT id, entity_id FROM properties`) as Record<string, any>[]
+  const entOf = new Map<number, number | null>(props.map(p => [p.id, p.entity_id ?? null]))
+
+  let posted = 0
+  const skipped: { bankTxnId: number; reason: string }[] = []
+
+  for (const a of assignments) {
+    const category = (a.category || '').trim()
+    if (!category) { skipped.push({ bankTxnId: a.bankTxnId, reason: 'no category' }); continue }
+    if (!entOf.has(a.propertyId)) { skipped.push({ bankTxnId: a.bankTxnId, reason: 'unknown property' }); continue }
+
+    const rows = (await sql`
+      SELECT id, to_char(txn_date, 'YYYY-MM-DD') AS txn_date,
+             amount::float8 AS amount, name_norm, status
+      FROM bank_txns WHERE id = ${a.bankTxnId}
+    `) as Record<string, any>[]
+    const bank = rows[0]
+    if (!bank) { skipped.push({ bankTxnId: a.bankTxnId, reason: 'not found' }); continue }
+    if (bank.status !== 'pending') { skipped.push({ bankTxnId: a.bankTxnId, reason: 'already resolved' }); continue }
+
+    const txnDate = String(bank.txn_date).slice(0, 10)
+    if (await isDateClosed(a.propertyId, txnDate)) {
+      skipped.push({ bankTxnId: a.bankTxnId, reason: 'closed period' }); continue
+    }
+
+    const type = bank.amount > 0 ? 'income' : 'expense'
+    const amount = Math.abs(bank.amount)
+    const ins = (await sql`
+      INSERT INTO transactions
+        (type, amount, method, status, category, txn_date, entity_id, unit_id,
+         rental_period, created_by, is_deposit, description, property_id)
+      VALUES
+        (${type}, ${amount}, 'import', 'actual', ${category}, ${txnDate}::date,
+         ${entOf.get(a.propertyId) ?? null}, NULL, NULL, ${editor}, FALSE,
+         ${bank.name_norm}, ${a.propertyId})
+      RETURNING id
+    `) as Record<string, any>[]
+    await sql`
+      INSERT INTO bank_txn_legs (bank_txn_id, transaction_id, link_type, amount)
+      VALUES (${a.bankTxnId}, ${ins[0].id}, 'created', ${amount})
+    `
+    await sql`
+      UPDATE bank_txns SET status = 'posted', resolved_by = ${editor}, resolved_at = NOW()
+      WHERE id = ${a.bankTxnId}
+    `
+    posted++
+  }
+
+  refresh()
+  return { posted, skipped }
+}
