@@ -52,6 +52,7 @@ export default async function PeriodsPage({ params }: { params: Promise<{ id: st
            type, COALESCE(SUM(amount), 0)::float8 AS total
     FROM transactions
     WHERE property_id = ${propertyId} AND status = 'actual' AND txn_date >= ${startBound}
+      AND COALESCE(is_deposit, FALSE) = FALSE
     GROUP BY y, q, type
   `) as { y: number; q: number; type: string; total: number }[]
   const net: Record<string, number> = {}
