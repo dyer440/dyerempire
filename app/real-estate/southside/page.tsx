@@ -12,12 +12,8 @@ import { getEditorEmail } from '@/lib/ledger-guard'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import LedgerView, { LedgerRow } from '@/app/real-estate/_components/LedgerView'
-import LedgerRangeControls from '@/app/real-estate/_components/LedgerRangeControls'
+import MonthPager, { monthBounds, currentMonth } from '@/app/real-estate/_components/MonthPager'
 import SouthsideTabs from '@/app/real-estate/_components/SouthsideTabs'
-
-function ymd(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 export default async function SouthsidePage({
   searchParams,
@@ -29,11 +25,8 @@ export default async function SouthsidePage({
   if (!editor) redirect('/real-estate')
 
   const sp = (await searchParams) || {}
-  const now = new Date()
-  const fromDefault = ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1))
-  const toDefault = ymd(new Date(now.getFullYear(), now.getMonth() + 13, 0))
-  const from = sp.from || fromDefault
-  const to = sp.to || toDefault
+  const month = /^\d{4}-\d{2}$/.test(sp.month || '') ? (sp.month as string) : currentMonth()
+  const { from, to, label } = monthBounds(month)
 
   const properties = (await sql`
     SELECT id, name FROM properties WHERE status = 'active' ORDER BY name
@@ -71,7 +64,7 @@ export default async function SouthsidePage({
 
       <SouthsideTabs />
 
-      <LedgerRangeControls from={from} to={to} />
+      <MonthPager basePath="/real-estate/southside" month={month} />
 
       <LedgerView
         rows={rows as LedgerRow[]}
@@ -80,7 +73,7 @@ export default async function SouthsidePage({
       />
 
       <p className="mt-4 text-xs text-gray-400">
-        Showing {from} to {to}. Add <code>?from=YYYY-MM-DD&amp;to=YYYY-MM-DD</code> to change the window.
+        Showing {label}. Scheduled items appear once their month arrives; confirm them as they clear.
       </p>
     </div>
   )
