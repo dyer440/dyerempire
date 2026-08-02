@@ -34,8 +34,8 @@ export async function recordDistribution(formData: FormData) {
     total = parseFloat(overrideRaw)
     if (isNaN(total) || total < 0) return // explicit value: allow 0, reject negatives/garbage
   } else {
-    total = c.distributable
-    if (total <= 0) return // blank field: only auto-record a positive distributable
+    total = c.distributableCash
+    if (total <= 0) return // blank field: only auto-record a positive cash-basis distributable
   }
 
   // Replace any prior record for this period (idempotent)
