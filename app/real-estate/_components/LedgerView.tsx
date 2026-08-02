@@ -18,6 +18,7 @@ export type LedgerRow = {
   amount: number // positive
   txn_date: string // 'YYYY-MM-DD'
   description: string | null
+  is_deposit?: boolean
   status: string // 'actual' | 'forecast'
   locked: boolean // date falls in a closed period
 }
@@ -339,7 +340,14 @@ function GroupRows({
           <tr key={r.id} className={'border-t border-gray-200 ' + (isForecast ? 'bg-amber-50/60' : 'bg-white') + (r.locked ? ' opacity-60' : '')}>
             <td className="whitespace-nowrap px-3 py-2 text-gray-700">{dayLabel(r.txn_date)}</td>
             {showProperty && <td className="whitespace-nowrap px-3 py-2 text-gray-600">{r.property_name}</td>}
-            <td className="px-3 py-2 text-gray-800">{r.category}</td>
+            <td className="px-3 py-2 text-gray-800">
+              {r.is_deposit ? (
+                <span className="inline-flex items-center gap-1.5">
+                  Deposit
+                  <span className="rounded bg-blue-100 px-1 text-[9px] font-semibold text-blue-700">liability</span>
+                </span>
+              ) : r.category}
+            </td>
             <td className="px-3 py-2 text-gray-500">{r.description || '—'}</td>
             <td className={'whitespace-nowrap px-3 py-2 text-right font-medium tabular-nums ' + (signed < 0 ? 'text-red-600' : 'text-emerald-700')}>
               {usd(signed)}
