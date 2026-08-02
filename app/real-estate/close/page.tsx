@@ -207,8 +207,8 @@ export default async function QuarterClosePage({
             <div><div className="text-[10px] uppercase text-gray-400">Income</div><div className="font-medium tabular-nums">{money(c.income)}</div></div>
             <div><div className="text-[10px] uppercase text-gray-400">Operating exp.</div><div className="font-medium tabular-nums">{money(c.opExpense)}</div></div>
             <div><div className="text-[10px] uppercase text-gray-400">Tax/Ins paid</div><div className="font-medium tabular-nums">{money(c.reservedExpense)}</div></div>
-            <div><div className="text-[10px] uppercase text-gray-400">Operating net</div>
-              <div className={`font-semibold tabular-nums ${c.operatingNet < 0 ? 'text-red-600' : ''}`}>{money(c.operatingNet)}</div>
+            <div><div className="text-[10px] uppercase text-gray-400">Net (all-in)</div>
+              <div className={`font-semibold tabular-nums ${c.allInNet < 0 ? 'text-red-600' : ''}`}>{money(c.allInNet)}</div>
             </div>
           </div>
           {c.scheduledIncluded && (
