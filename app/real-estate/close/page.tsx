@@ -12,7 +12,7 @@
 import sql from '@/lib/db'
 import { getEditorEmail } from '@/lib/ledger-guard'
 import { computeQuarter, quarterBounds, isValidPeriod } from '@/lib/distributions'
-import { wsRecordDistribution, wsClearDistribution, wsClosePeriod, wsReopenPeriod } from './actions'
+import { wsRecordDistribution, wsClearDistribution, wsClosePeriod, wsReopenPeriod, wsDismissPair } from './actions'
 import Link from 'next/link'
 
 export const dynamic = 'force-dynamic'
@@ -92,6 +92,10 @@ export default async function QuarterClosePage({
         WHERE a.property_id = ${p.id} AND a.status = 'actual' AND b.status = 'actual'
           AND a.txn_date BETWEEN ${start} AND ${end}
           AND COALESCE(a.is_deposit, FALSE) = FALSE AND COALESCE(b.is_deposit, FALSE) = FALSE
+          AND NOT EXISTS (
+            SELECT 1 FROM reviewed_pairs rp
+            WHERE rp.txn_id_a = LEAST(a.id, b.id) AND rp.txn_id_b = GREATEST(a.id, b.id)
+          )
         ORDER BY a.txn_date
       `) as Record<string, any>[]
 
@@ -221,8 +225,15 @@ export default async function QuarterClosePage({
           {(dupes.length > 0 || noRentMonths.length > 0) && (
             <div className="mx-4 mb-3 rounded border border-orange-200 bg-orange-50 p-3 text-xs text-orange-900 space-y-1">
               {dupes.map((d, i) => (
-                <div key={i}>
-                  Possible duplicate: id{d.id_a} ({d.date_a}, “{d.desc_a}”) and id{d.id_b} ({d.date_b}, “{d.desc_b}”) — both {d.type} {money(d.amount)}.
+                <div key={i} className="flex flex-wrap items-center gap-2">
+                  <span>
+                    Possible duplicate: id{d.id_a} ({d.date_a}, “{d.desc_a}”) and id{d.id_b} ({d.date_b}, “{d.desc_b}”) — both {d.type} {money(d.amount)}.
+                  </span>
+                  <form action={wsDismissPair}>
+                    <input type="hidden" name="txn_id_a" value={d.id_a} />
+                    <input type="hidden" name="txn_id_b" value={d.id_b} />
+                    <button type="submit" className="text-[11px] underline hover:no-underline">reviewed — dismiss</button>
+                  </form>
                 </div>
               ))}
               {noRentMonths.length > 0 && (
