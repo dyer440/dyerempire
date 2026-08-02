@@ -35,7 +35,7 @@ export default async function SouthsidePage({
   const rows = (await sql`
     SELECT t.id, t.property_id, p.name AS property_name, t.type, t.category,
            t.amount::float8 AS amount, to_char(t.txn_date, 'YYYY-MM-DD') AS txn_date,
-           t.description, t.status,
+           t.description, t.status, COALESCE(t.is_deposit, FALSE) AS is_deposit,
            EXISTS (
              SELECT 1 FROM period_closes pc
              WHERE pc.property_id = t.property_id AND t.txn_date BETWEEN pc.period_start AND pc.period_end
