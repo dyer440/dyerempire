@@ -15,6 +15,7 @@ export default function PropertyNav({
     { label: 'Overview', href: base, active: pathname === base },
     { label: 'Capital', href: `${base}/capital`, active: pathname === `${base}/capital` },
     { label: 'Returns', href: `${base}/returns`, active: pathname === `${base}/returns` },
+    { label: 'Summary', href: `${base}/summary`, active: pathname === `${base}/summary` },
     ...(canEdit
       ? [
           { label: 'Schedules', href: `${base}/schedules`, active: pathname.startsWith(`${base}/schedules`) },
