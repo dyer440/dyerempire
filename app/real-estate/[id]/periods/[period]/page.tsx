@@ -103,7 +103,7 @@ export default async function PeriodDetailPage({
         {/* Forward runway — "safe to distribute today" */}
         <div className="border border-emerald-400/20 p-6 mb-6">
           <div className="text-emerald-400/50 text-xs tracking-widest uppercase mb-3">Runway to next reserve bill</div>
-          <Row label={`Retained cash (YTD actual NOI${c.distributedYtd > 0 ? ' − distributed' : ''})`} value={fmt(c.retainedCash)} dim />
+          <Row label={`Retained cash (YTD all-in NOI, net of tax paid${c.distributedYtd > 0 ? ' & distributions' : ''})`} value={fmt(c.retainedCash)} dim />
           <Row label={`+ Scheduled NOI until ${c.nextReserveBillDate ? shortDate(c.nextReserveBillDate) : 'next bill'}`} value={`+${fmt(c.forwardNoi)}`} tone="text-emerald-400/70" />
           <Row label="− Upcoming tax/insurance" value={`(${fmt(c.upcomingReserve)})`} tone="text-amber-400/80" />
           <div className="border-t border-white/10 my-1" />
