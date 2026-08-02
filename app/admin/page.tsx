@@ -2,8 +2,7 @@ import { auth, currentUser } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
 import sql from '@/lib/db'
 import { initDb } from '@/lib/init-db'
-
-const ADMIN_EMAIL = 'david.dyer.24@gmail.com'
+import { ADMIN_EMAIL } from '@/lib/constants'
 
 async function getUsers() {
   await initDb()
