@@ -13,6 +13,7 @@ import { editTransaction } from '../ledger-form-actions'
 type Txn = {
   id: number; type: string; category: string; amount: string; txn_date: string
   description: string | null; unit_label: string | null; unit_id: number | null; status: string
+  is_deposit: boolean
 }
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -113,7 +114,8 @@ export default async function PropertyPage({
   const rows = (await sql`
     SELECT t.id, t.type, t.category, t.amount,
            to_char(t.txn_date, 'YYYY-MM-DD') AS txn_date,
-           t.description, t.status, t.unit_id, u.label AS unit_label
+           t.description, t.status, t.unit_id, u.label AS unit_label,
+           COALESCE(t.is_deposit, FALSE) AS is_deposit
     FROM transactions t LEFT JOIN units u ON u.id = t.unit_id
     WHERE t.property_id = ${propertyId}
       AND t.txn_date BETWEEN ${fromDate} AND ${toDate}
@@ -337,7 +339,10 @@ export default async function PropertyPage({
                         </div>
                         <div>
                           <div className={`text-sm ${scheduled ? 'text-white/50' : 'text-white/70'} flex items-center gap-2`}>
-                            {t.category}
+                            {t.is_deposit ? 'Deposit' : t.category}
+                            {t.is_deposit && (
+                              <span className="rounded-full border border-blue-400/40 text-blue-300/80 px-2 py-0.5 text-[10px] tracking-widest uppercase">Liability</span>
+                            )}
                             {scheduled && (
                               <span className="rounded-full border border-amber-400/40 text-amber-400/80 px-2 py-0.5 text-[10px] tracking-widest uppercase">Scheduled</span>
                             )}
@@ -409,6 +414,10 @@ export default async function PropertyPage({
                             {units.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}
                           </select>
                           <input name="description" type="text" defaultValue={t.description ?? ''} placeholder="Description" className={editFieldCls} />
+                          <label className="flex items-center gap-2 text-xs text-white/50 px-1">
+                            <input name="is_deposit" type="checkbox" defaultChecked={t.is_deposit} className="accent-blue-400" />
+                            Security deposit (liability, excluded from income)
+                          </label>
                           <button type="submit" className="border border-white/30 px-4 py-1 text-xs tracking-widest uppercase hover:bg-white/10 transition-all">
                             Save
                           </button>
