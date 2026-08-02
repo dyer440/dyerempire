@@ -122,23 +122,26 @@ export async function computeQuarter(propertyId: number, period: string): Promis
   // must cover that bill. Forward NOI RELIEVES how much of today's cash you must
   // hold — it never adds to what you can give (you can't distribute rent you
   // haven't collected). So the figure is capped at retained cash.
-  //   retainedCash      = cumulative ACTUAL operating NOI (year→period end) − distributed YTD
+  //   retainedCash      = cumulative ACTUAL all-in NOI (year→period end, INCLUDING
+  //                       tax/insurance already paid this year) − distributed YTD.
+  //                       Using operating NOI here would double-count: it would
+  //                       ignore a tax bill already paid AND reserve the next one.
   //   forwardNoi        = scheduled/booked operating NOI from period end → the next reserve bill
   //   reserveShortfall  = the part of the upcoming bill forward NOI WON'T cover
   //   runwayDistributable = retainedCash − reserveShortfall  (floored at 0)
   const ytdRows = (await sql`
-    SELECT type, category, COALESCE(SUM(amount), 0)::float8 AS total
+    SELECT type, COALESCE(SUM(amount), 0)::float8 AS total
     FROM transactions WHERE property_id = ${propertyId} AND status = 'actual'
       AND txn_date BETWEEN ${yearStart} AND ${end}
       AND COALESCE(is_deposit, FALSE) = FALSE
-    GROUP BY type, category
-  `) as { type: string; category: string; total: number }[]
-  let cumIncome = 0, cumOpEx = 0
+    GROUP BY type
+  `) as { type: string; total: number }[]
+  let cumIncome = 0, cumExpenseAll = 0
   for (const r of ytdRows) {
     if (r.type === 'income') cumIncome += r.total
-    else if (!RESERVED_SET.has(r.category)) cumOpEx += r.total
+    else cumExpenseAll += r.total // ALL expenses, incl. tax/insurance already paid
   }
-  const cumulativeActualNoi = cumIncome - cumOpEx
+  const cumulativeActualNoi = cumIncome - cumExpenseAll
 
   const distRows = (await sql`
     SELECT COALESCE(SUM(amount), 0)::float8 AS total FROM distributions
