@@ -5,6 +5,7 @@ import sql from '@/lib/db'
 import { initDb } from '@/lib/init-db'
 import { getUserRole, canAccessProperty } from '@/lib/access'
 import { computeReturns } from '@/lib/irr'
+import { computeQuarter } from '@/lib/distributions'
 
 const fmt = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const fmtDate = (s: string | null) =>
@@ -37,8 +38,24 @@ export default async function ReturnsPage({
     FROM distributions WHERE property_id = ${propertyId}
     GROUP BY period ORDER BY period DESC LIMIT 4
   `) as { t: number }[]
-  const avg = recent.length ? recent.reduce((s, r) => s + r.t, 0) / recent.length : 3450
-  const defaultFq = Math.round(avg)
+  // Fallback when there's no distribution history: use the most recently completed
+  // quarter's runway distributable (what the property could actually support today)
+  // rather than a hardcoded guess.
+  let defaultFq: number
+  if (recent.length) {
+    defaultFq = Math.round(recent.reduce((s, r) => s + r.t, 0) / recent.length)
+  } else {
+    const d = new Date()
+    const pq = Math.floor(d.getMonth() / 3) // 0-3; previous quarter index
+    const py = pq === 0 ? d.getFullYear() - 1 : d.getFullYear()
+    const pLabel = `${py}-Q${pq === 0 ? 4 : pq}`
+    try {
+      const c = await computeQuarter(propertyId, pLabel)
+      defaultFq = Math.max(Math.round(c.runwayDistributable), 0)
+    } catch {
+      defaultFq = 0
+    }
+  }
 
   const forecastQuarterly = sp.fq !== undefined && sp.fq !== '' ? Math.max(parseFloat(sp.fq), 0) : defaultFq
   const horizonYears = sp.hz !== undefined && sp.hz !== '' ? Math.max(parseInt(sp.hz), 1) : 25
@@ -176,7 +193,7 @@ export default async function ReturnsPage({
             Recompute
           </button>
           <p className="text-[11px] text-white/25 mt-3">
-            Forecast defaults to the average of your last four quarterly distributions ({fmt(defaultFq)}). Contributions and
+            Forecast defaults to the average of your last four quarterly distributions, or — with no history — the last quarter's runway distributable ({fmt(defaultFq)}). Contributions and
             recorded distributions are actual; only future quarters are projected.
           </p>
         </form>
