@@ -21,13 +21,20 @@ export async function editTransaction(formData: FormData) {
   const description = String(formData.get('description') || '').trim() || null
   const unitRaw = formData.get('unit_id')
   const unitId = unitRaw && String(unitRaw) !== '' ? Number(unitRaw) : null
+  const isDeposit = formData.get('is_deposit') === 'on' || formData.get('is_deposit') === 'true'
 
   if (!Number.isInteger(id) || !Number.isInteger(propertyId)) throw new Error('Bad request.')
   if (!category) throw new Error('Category is required.')
   if (!Number.isFinite(amount) || amount <= 0) throw new Error('Amount must be greater than zero.')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(txnDate)) throw new Error('A valid date is required.')
 
-  const type = (INCOME_CATEGORIES as readonly string[]).includes(category) ? 'income' : 'expense'
+  // A deposit is a liability, not P&L, so it's always income-typed and flagged.
+  // (Deposit RETURNS are handled in the rent roll; the overview edit toggles the
+  // common case — a collection that should have been flagged.)
+  const type = isDeposit
+    ? 'income'
+    : (INCOME_CATEGORIES as readonly string[]).includes(category) ? 'income' : 'expense'
+  const finalCategory = isDeposit ? 'Rental Income' : category
 
   // Block edits touching a closed period (either the original or the new date).
   const old = (await sql`
@@ -40,8 +47,9 @@ export async function editTransaction(formData: FormData) {
 
   await sql`
     UPDATE transactions
-    SET type = ${type}, category = ${category}, amount = ${amount},
-        txn_date = ${txnDate}, description = ${description}, unit_id = ${unitId}
+    SET type = ${type}, category = ${finalCategory}, amount = ${amount},
+        txn_date = ${txnDate}, description = ${description}, unit_id = ${unitId},
+        is_deposit = ${isDeposit}
     WHERE id = ${id}
   `
   revalidatePath(`/real-estate/${propertyId}`)
