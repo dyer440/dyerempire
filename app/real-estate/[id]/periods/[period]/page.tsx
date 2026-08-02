@@ -131,10 +131,9 @@ export default async function PeriodDetailPage({
           </div>
           <div className="border-t border-white/5 mt-3 pt-3 space-y-1">
             <Row label="Single-quarter cash basis (holds full next bill)" value={fmt(c.distributableCash)} dim />
-            <Row label="Smoothed accrual (annual ÷ 4)" value={fmt(c.distributable)} dim />
           </div>
           <p className="text-[11px] text-white/40 mt-3">
-            Split is of the runway figure above. The two references show the more conservative single-quarter views.
+            Split is of the runway figure above; the reference line shows the more conservative single-quarter view.
           </p>
         </div>
 
@@ -169,6 +168,10 @@ export default async function PeriodDetailPage({
                 className="border border-emerald-400/30 text-emerald-400/80 px-5 py-2 text-xs tracking-widest uppercase hover:bg-emerald-400/10 transition-all">
                 Record distribution
               </button>
+              <label className="flex items-center gap-2 text-[10px] text-white/30 pb-2">
+                <input type="checkbox" name="allow_over" className="accent-amber-400" />
+                confirm over-distribution
+              </label>
             </form>
           ) : (
             <form action={clearDistribution}>
