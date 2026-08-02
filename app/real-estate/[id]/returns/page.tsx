@@ -45,6 +45,36 @@ export default async function ReturnsPage({
 
   const r = await computeReturns(propertyId, forecastQuarterly, horizonYears)
 
+  // Distribution history — recorded distributions by period, per owner, with a
+  // running cumulative. Actuals only; this is the record of cash actually paid.
+  const distHist = (await sql`
+    SELECT d.period, o.name AS owner,
+           to_char(MAX(d.distributed_on), 'YYYY-MM-DD') AS paid_date,
+           SUM(d.amount)::float8 AS amount
+    FROM distributions d JOIN owners o ON o.id = d.owner_id
+    WHERE d.property_id = ${propertyId}
+    GROUP BY d.period, o.name
+    ORDER BY d.period
+  `) as { period: string; owner: string; paid_date: string | null; amount: number }[]
+
+  const periodsMap = new Map<string, { owners: Record<string, number>; total: number; date: string | null }>()
+  const ownerNames: string[] = []
+  for (const row of distHist) {
+    if (!ownerNames.includes(row.owner)) ownerNames.push(row.owner)
+    const e = periodsMap.get(row.period) || { owners: {}, total: 0, date: null }
+    e.owners[row.owner] = (e.owners[row.owner] || 0) + row.amount
+    e.total += row.amount
+    if (row.paid_date && (!e.date || row.paid_date > e.date)) e.date = row.paid_date
+    periodsMap.set(row.period, e)
+  }
+  const distPeriods = [...periodsMap.entries()]
+  let cumulative = 0
+  const distRows = distPeriods.map(([period, e]) => {
+    cumulative += e.total
+    return { period, ...e, cumulative }
+  })
+  const distGrandTotal = cumulative
+
   return (
     <main className="min-h-screen bg-black text-white p-6 md:p-10">
       <div className="max-w-3xl mx-auto">
@@ -80,6 +110,49 @@ export default async function ReturnsPage({
             IRR is highly sensitive to the holding period because no sale is modeled — the longer you hold and collect
             distributions, the higher it climbs. At a {horizonYears}-year hold this is {r.irr === null ? '—' : `${(r.irr * 100).toFixed(2)}%`}.
             Adjust the assumptions below to test other scenarios.
+          </p>
+        </div>
+
+        {/* Distribution history */}
+        <div className="border border-white/10 p-6 mb-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="text-white/30 text-xs tracking-widest uppercase">Distribution history</div>
+            <div className="text-sm text-white/60">Total paid: <span className="text-white/90" style={{ fontFamily: 'Georgia, serif' }}>{fmt(distGrandTotal)}</span></div>
+          </div>
+          {distRows.length === 0 ? (
+            <p className="text-sm text-white/40">No distributions recorded yet.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-[10px] uppercase tracking-widest text-white/30 border-b border-white/10">
+                    <th className="py-2 pr-4">Period</th>
+                    <th className="py-2 pr-4">Paid</th>
+                    {ownerNames.map(n => <th key={n} className="py-2 pr-4 text-right">{n}</th>)}
+                    <th className="py-2 pr-4 text-right">Total</th>
+                    <th className="py-2 text-right">Cumulative</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {distRows.map(row => (
+                    <tr key={row.period} className="border-b border-white/5">
+                      <td className="py-2 pr-4 text-white/80">{row.period}</td>
+                      <td className="py-2 pr-4 text-white/40">{fmtDate(row.date)}</td>
+                      {ownerNames.map(n => (
+                        <td key={n} className="py-2 pr-4 text-right text-white/70 tabular-nums">
+                          {row.owners[n] != null ? fmt(row.owners[n]) : '—'}
+                        </td>
+                      ))}
+                      <td className="py-2 pr-4 text-right text-white/90 tabular-nums">{fmt(row.total)}</td>
+                      <td className="py-2 text-right text-white/50 tabular-nums">{fmt(row.cumulative)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="text-[11px] text-white/25 mt-3">
+            Recorded distributions only. A $0 period is a deliberately-recorded &ldquo;no distribution&rdquo; quarter.
           </p>
         </div>
 
