@@ -55,7 +55,7 @@ describe('auth invariants', () => {
     expect(addUser).toMatch(/requireAdmin\(\)/)
   })
   it('ADMIN_EMAIL is defined once, in lib/constants', () => {
-    for (const f of ['middleware.ts', 'lib/access.ts', 'app/admin/page.tsx']) {
+    for (const f of ['proxy.ts', 'lib/access.ts', 'app/admin/page.tsx']) {
       expect(read(f)).not.toMatch(/const ADMIN_EMAIL = '/)
     }
     expect(read('lib/constants.ts')).toMatch(/export const ADMIN_EMAIL/)
