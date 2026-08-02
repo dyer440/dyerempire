@@ -45,6 +45,8 @@ export default async function PeriodDetailPage({
   const recordedTotal = recorded.reduce((s, r) => s + parseFloat(r.amount), 0)
 
   const fmt = (n: number) => `$${n.toFixed(2)}`
+  const shortDate = (d: string) =>
+    new Date(`${d}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   const Row = ({ label: l, value, tone, dim }: { label: string; value: string; tone?: string; dim?: boolean }) => (
     <div className={`flex justify-between py-2 text-sm ${dim ? 'text-white/40' : 'text-white/70'}`}>
       <span>{l}</span>
@@ -98,16 +100,28 @@ export default async function PeriodDetailPage({
           )}
         </div>
 
+        {/* Forward runway — "safe to distribute today" */}
+        <div className="border border-emerald-400/20 p-6 mb-6">
+          <div className="text-emerald-400/50 text-xs tracking-widest uppercase mb-3">Runway to next reserve bill</div>
+          <Row label={`Retained cash (YTD actual NOI${c.distributedYtd > 0 ? ' − distributed' : ''})`} value={fmt(c.retainedCash)} dim />
+          <Row label={`+ Scheduled NOI until ${c.nextReserveBillDate ? shortDate(c.nextReserveBillDate) : 'next bill'}`} value={`+${fmt(c.forwardNoi)}`} tone="text-emerald-400/70" />
+          <Row label="− Upcoming tax/insurance" value={`(${fmt(c.upcomingReserve)})`} tone="text-amber-400/80" />
+          <div className="border-t border-white/10 my-1" />
+          <Row label="Projected cash after the bill" value={fmt(c.projectedCashAfterBill)} tone={c.projectedCashAfterBill >= 0 ? 'text-white/60' : 'text-red-400'} />
+          <div className="border-t border-white/10 my-1" />
+          <Row label="Safe to distribute today" value={fmt(c.runwayDistributable)} tone={c.runwayDistributable > 0 ? 'text-emerald-400' : 'text-white/50'} />
+          <p className="text-[11px] text-white/40 mt-3 leading-relaxed">
+            {c.reserveShortfall > 0
+              ? `Incoming rent covers all but ${fmt(c.reserveShortfall)} of the next bill, so that much is held back from your retained cash.`
+              : `Incoming scheduled rent fully covers the next tax/insurance bill, so your retained cash is free to distribute.`}{' '}
+            Capped at retained cash — never distributes rent you haven&apos;t collected. Assumes scheduled rent arrives; leaves {fmt(c.projectedCashAfterBill)} after the bill.
+          </p>
+        </div>
+
         {/* Distributable + split */}
         <div className="border border-white/10 p-6 mb-6">
-          <div className="text-white/30 text-xs tracking-widest uppercase mb-3">Distribution</div>
-          <Row label="Operating net" value={fmt(c.operatingNet)} dim />
-          <Row label="Hold next 6mo tax/insurance" value={`(${fmt(c.upcomingReserve)})`} tone="text-amber-400/80" />
-          <div className="border-t border-white/10 my-1" />
-          <Row label="Distributable (cash basis)" value={fmt(c.distributableCash)} tone={c.distributableCash >= 0 ? 'text-emerald-400' : 'text-amber-400'} />
-          <Row label="Distributable (smoothed accrual)" value={fmt(c.distributable)} dim />
-
-          <div className="mt-4 space-y-1">
+          <div className="text-white/30 text-xs tracking-widest uppercase mb-3">Owner split</div>
+          <div className="mt-1 space-y-1">
             {c.split.map((s) => (
               <div key={s.owner_id} className="flex justify-between text-sm">
                 <span className="text-white/70">{s.name} <span className="text-white/30">· {s.pct.toFixed(2)}%</span></span>
@@ -115,15 +129,13 @@ export default async function PeriodDetailPage({
               </div>
             ))}
           </div>
-          {c.distributableCash <= 0 ? (
-            <p className="text-[11px] text-white/40 mt-3">
-              Nothing free to distribute after holding the next tax/insurance bill — record $0, or override below if you have cash from a prior quarter.
-            </p>
-          ) : (
-            <p className="text-[11px] text-white/40 mt-3">
-              Cash basis holds this property&apos;s full upcoming tax/insurance (paid lump-sum from cash), rather than a smoothed quarter-slice.
-            </p>
-          )}
+          <div className="border-t border-white/5 mt-3 pt-3 space-y-1">
+            <Row label="Single-quarter cash basis (holds full next bill)" value={fmt(c.distributableCash)} dim />
+            <Row label="Smoothed accrual (annual ÷ 4)" value={fmt(c.distributable)} dim />
+          </div>
+          <p className="text-[11px] text-white/40 mt-3">
+            Split is of the runway figure above. The two references show the more conservative single-quarter views.
+          </p>
         </div>
 
         {/* Recorded distribution status */}
@@ -150,7 +162,7 @@ export default async function PeriodDetailPage({
               <input type="hidden" name="period" value={period} />
               <div>
                 <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">Distribution total</label>
-                <input name="amount" type="number" step="0.01" min="0" defaultValue={Math.max(c.distributableCash, 0).toFixed(2)}
+                <input name="amount" type="number" step="0.01" min="0" defaultValue={Math.max(c.runwayDistributable, 0).toFixed(2)}
                   className="w-32 bg-white/5 border border-white/20 px-3 py-1.5 text-white text-sm focus:outline-none focus:border-white/50" />
               </div>
               <button type="submit"
