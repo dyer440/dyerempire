@@ -19,13 +19,13 @@ export const FORM_8825_LINES: Form8825Line[] = [
   { line: '4', label: 'Commissions', categories: [] },
   { line: '5', label: 'Insurance', categories: ['Insurance'] },
   { line: '6', label: 'Legal & other professional fees', categories: ['Legal', 'Payroll Fees', 'Bank Fees'] },
-  { line: '7', label: 'Interest (mortgage & other)', categories: ['Interest'] },
-  { line: '8', label: 'Repairs', categories: ['Repairs', 'Repairs & Maintenance', 'Contractors'] },
+  { line: '7', label: 'Interest (mortgage & other)', categories: ['Mortgage Interest', 'Interest'] },
+  { line: '8', label: 'Repairs', categories: ['Repairs & Maintenance', 'Repairs', 'Contractors'] },
   { line: '9', label: 'Taxes', categories: ['Property Taxes', 'Municipal Fees', 'Sanitary', 'Refuse', 'Fire Fee'] },
   { line: '10', label: 'Utilities', categories: ['Utilities'] },
   { line: '11', label: 'Wages & salaries', categories: ['Payroll'] },
   { line: '13', label: 'Management fees', categories: ['Management Fee', 'Management'] },
-  { line: '14', label: 'Other (supplies, misc.)', categories: ['Materials & Supplies', 'Supplies', 'Other Misc. Expenses', 'Other Expense', 'Marketing'] },
+  { line: '14', label: 'Other (supplies, misc.)', categories: ['Materials & Supplies', 'Supplies', 'Other Expense', 'Other Misc. Expenses', 'Marketing'] },
 ]
 
 // Categories that must NOT appear in the P&L rollup at all.
