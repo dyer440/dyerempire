@@ -42,6 +42,29 @@ export default async function SchedulesPage({ params }: { params: Promise<{ id: 
     WHERE property_id = ${propertyId} AND status = 'forecast' AND txn_date >= CURRENT_DATE
   `) as { n: number }[]
 
+  // Per-schedule visibility: the upcoming forecast months each schedule holds,
+  // and how many months it's already confirmed — so it's obvious what exists and
+  // what regenerate would (re)create. Regenerate only rebuilds future forecasts
+  // and skips confirmed months, so these numbers show it can't duplicate.
+  const fRows = (await sql`
+    SELECT schedule_id, to_char(txn_date, 'Mon') AS mon, txn_date
+    FROM transactions
+    WHERE property_id = ${propertyId} AND status = 'forecast'
+      AND schedule_id IS NOT NULL AND txn_date >= date_trunc('month', CURRENT_DATE)
+    ORDER BY txn_date
+  `) as { schedule_id: number; mon: string; txn_date: string }[]
+  const upcomingBySchedule: Record<number, string[]> = {}
+  for (const r of fRows) (upcomingBySchedule[r.schedule_id] ||= []).push(r.mon)
+
+  const cRows = (await sql`
+    SELECT schedule_id, COUNT(*)::int AS n
+    FROM transactions
+    WHERE property_id = ${propertyId} AND status = 'actual' AND schedule_id IS NOT NULL
+    GROUP BY schedule_id
+  `) as { schedule_id: number; n: number }[]
+  const confirmedBySchedule: Record<number, number> = {}
+  for (const r of cRows) confirmedBySchedule[r.schedule_id] = r.n
+
   return (
     <main className="min-h-screen bg-black text-white p-6 md:p-10">
       <div className="max-w-3xl mx-auto">
@@ -63,14 +86,22 @@ export default async function SchedulesPage({ params }: { params: Promise<{ id: 
         </div>
 
         {/* Regenerate */}
-        <form action={regenerateForecasts} className="flex items-center justify-between border border-white/10 p-4 mb-8">
-          <div className="text-xs text-white/50">
-            {forecastCount[0]?.n ?? 0} forecast rows projected ahead (12-month horizon, excluding closed quarters).
+        <form action={regenerateForecasts} className="border border-white/10 p-4 mb-8">
+          <div className="flex items-center justify-between">
+            <div className="text-xs text-white/50 max-w-lg">
+              {forecastCount[0]?.n ?? 0} forecast rows projected ahead (12-month horizon, excluding closed quarters).
+            </div>
+            <input type="hidden" name="property_id" value={propertyId} />
+            <button type="submit" className="border border-white/30 px-5 py-2 text-xs tracking-widest uppercase hover:bg-white/10 transition-all">
+              Regenerate
+            </button>
           </div>
-          <input type="hidden" name="property_id" value={propertyId} />
-          <button type="submit" className="border border-white/30 px-5 py-2 text-xs tracking-widest uppercase hover:bg-white/10 transition-all">
-            Regenerate
-          </button>
+          <p className="text-[11px] text-white/30 mt-3 max-w-xl leading-relaxed">
+            Regenerate deletes the <em>future forecast</em> rows and rebuilds them from the active
+            schedules below. It never touches actuals or any month you&apos;ve already confirmed, and it
+            skips confirmed months — so it <span className="text-white/60">cannot create duplicates</span>.
+            Run it after adding, editing, or pausing a schedule.
+          </p>
         </form>
 
         {/* Add schedule */}
@@ -160,6 +191,21 @@ export default async function SchedulesPage({ params }: { params: Promise<{ id: 
                       {s.frequency}{s.months_csv ? ` · mo ${s.months_csv}` : ''} · day {s.day_of_month}
                       {s.unit_label ? ` · ${s.unit_label}` : ''}{s.description ? ` · ${s.description}` : ''}
                     </div>
+                    {!paused && (
+                      <div className="text-[11px] mt-1 flex flex-wrap items-center gap-x-2">
+                        {(upcomingBySchedule[s.id]?.length ?? 0) > 0 ? (
+                          <span className="text-white/50">
+                            Upcoming: {upcomingBySchedule[s.id].slice(0, 8).join(', ')}
+                            {upcomingBySchedule[s.id].length > 8 ? '…' : ''}
+                          </span>
+                        ) : (
+                          <span className="text-amber-400/60">No forecasts — Regenerate to project</span>
+                        )}
+                        {(confirmedBySchedule[s.id] ?? 0) > 0 && (
+                          <span className="text-emerald-400/60">· {confirmedBySchedule[s.id]} confirmed</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
