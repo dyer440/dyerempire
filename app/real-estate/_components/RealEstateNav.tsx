@@ -85,6 +85,9 @@ export default async function RealEstateNav() {
             <Link href="/real-estate/southside" className="px-3 py-3 text-white/70 hover:text-white whitespace-nowrap">
               Ledger
             </Link>
+            <Link href="/real-estate/close" className="px-3 py-3 text-white/70 hover:text-white whitespace-nowrap">
+              Quarter close
+            </Link>
             <details className="relative">
               <summary className="list-none cursor-pointer px-3 py-3 text-white/70 hover:text-white select-none">
                 Import <span className="text-white/30">▾</span>
