@@ -102,9 +102,10 @@ export default async function PeriodDetailPage({
         <div className="border border-white/10 p-6 mb-6">
           <div className="text-white/30 text-xs tracking-widest uppercase mb-3">Distribution</div>
           <Row label="Operating net" value={fmt(c.operatingNet)} dim />
-          <Row label="Less reserve set-aside" value={`(${fmt(c.reserveTargetQuarter)})`} dim />
+          <Row label="Hold next 6mo tax/insurance" value={`(${fmt(c.upcomingReserve)})`} tone="text-amber-400/80" />
           <div className="border-t border-white/10 my-1" />
-          <Row label="Distributable (smoothed)" value={fmt(c.distributable)} tone={c.distributable >= 0 ? 'text-emerald-400' : 'text-amber-400'} />
+          <Row label="Distributable (cash basis)" value={fmt(c.distributableCash)} tone={c.distributableCash >= 0 ? 'text-emerald-400' : 'text-amber-400'} />
+          <Row label="Distributable (smoothed accrual)" value={fmt(c.distributable)} dim />
 
           <div className="mt-4 space-y-1">
             {c.split.map((s) => (
@@ -114,8 +115,14 @@ export default async function PeriodDetailPage({
               </div>
             ))}
           </div>
-          {c.distributable <= 0 && (
-            <p className="text-[11px] text-white/40 mt-3">No smoothed distributable this quarter — you can still record an actual amount below.</p>
+          {c.distributableCash <= 0 ? (
+            <p className="text-[11px] text-white/40 mt-3">
+              Nothing free to distribute after holding the next tax/insurance bill — record $0, or override below if you have cash from a prior quarter.
+            </p>
+          ) : (
+            <p className="text-[11px] text-white/40 mt-3">
+              Cash basis holds this property&apos;s full upcoming tax/insurance (paid lump-sum from cash), rather than a smoothed quarter-slice.
+            </p>
           )}
         </div>
 
@@ -143,7 +150,7 @@ export default async function PeriodDetailPage({
               <input type="hidden" name="period" value={period} />
               <div>
                 <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">Distribution total</label>
-                <input name="amount" type="number" step="0.01" min="0" defaultValue={Math.max(c.distributable, 0).toFixed(2)}
+                <input name="amount" type="number" step="0.01" min="0" defaultValue={Math.max(c.distributableCash, 0).toFixed(2)}
                   className="w-32 bg-white/5 border border-white/20 px-3 py-1.5 text-white text-sm focus:outline-none focus:border-white/50" />
               </div>
               <button type="submit"
