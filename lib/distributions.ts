@@ -42,6 +42,7 @@ export type QuarterComputation = {
   operatingNet: number; allInNet: number
   annualReserve: number; reserveTargetQuarter: number
   distributable: number
+  upcomingReserve: number; distributableCash: number
   reservedPaidYtd: number; reserveAccrued: number; reserveBalance: number
   split: OwnerSplit[]
   flipActive: boolean
@@ -96,6 +97,22 @@ export async function computeQuarter(propertyId: number, period: string): Promis
   const reserveTargetQuarter = annualReserve / 4
   const distributable = operatingNet - reserveTargetQuarter
 
+  // Forward-looking CASH reserve: this property's own scheduled tax/insurance due
+  // in the next 6 months. Since bills are paid lump-sum out of held cash (not
+  // pre-accrued into a reserve account), THIS is what must actually stay put
+  // before distributing — the real "hold the next bill" number, distinct from the
+  // smoothed annual/4 above. distributableCash is the conservative, cash-true
+  // recommendation; `distributable` (smoothed) is kept as an accrual-basis reference.
+  const upcomingRows = (await sql`
+    SELECT COALESCE(SUM(amount), 0)::float8 AS total
+    FROM transactions
+    WHERE property_id = ${propertyId} AND status = 'forecast'
+      AND category IN ('Property Taxes', 'Insurance')
+      AND txn_date BETWEEN CURRENT_DATE AND (CURRENT_DATE + INTERVAL '6 months')
+  `) as { total: number }[]
+  const upcomingReserve = upcomingRows[0]?.total || 0
+  const distributableCash = operatingNet - upcomingReserve
+
   // "Paid YTD" means actually paid — keep this actuals-only.
   const paidRows = (await sql`
     SELECT COALESCE(SUM(amount), 0)::float8 AS total
@@ -118,12 +135,13 @@ export async function computeQuarter(propertyId: number, period: string): Promis
 
   const split: OwnerSplit[] = owners.map((o) => {
     const pct = flipActive ? evenPct : parseFloat(o.ownership_pct)
-    return { owner_id: o.owner_id, name: o.name, pct, amount: distributable > 0 ? (distributable * pct) / 100 : 0 }
+    return { owner_id: o.owner_id, name: o.name, pct, amount: distributableCash > 0 ? (distributableCash * pct) / 100 : 0 }
   })
 
   return {
     label, start, end, q, income, opExpense, reservedExpense,
     operatingNet, allInNet, annualReserve, reserveTargetQuarter, distributable,
+    upcomingReserve, distributableCash,
     reservedPaidYtd, reserveAccrued, reserveBalance, split, flipActive,
     scheduledIncluded, scheduledNet,
   }
