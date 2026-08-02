@@ -43,6 +43,9 @@ export type QuarterComputation = {
   annualReserve: number; reserveTargetQuarter: number
   distributable: number
   upcomingReserve: number; distributableCash: number
+  cumulativeActualNoi: number; distributedYtd: number; retainedCash: number
+  forwardNoi: number; nextReserveBillDate: string | null
+  reserveShortfall: number; projectedCashAfterBill: number; runwayDistributable: number
   reservedPaidYtd: number; reserveAccrued: number; reserveBalance: number
   split: OwnerSplit[]
   flipActive: boolean
@@ -113,6 +116,66 @@ export async function computeQuarter(propertyId: number, period: string): Promis
   const upcomingReserve = upcomingRows[0]?.total || 0
   const distributableCash = operatingNet - upcomingReserve
 
+  // ---- Forward runway: "safe to distribute today" ----
+  // The cash question at distribution time is a runway: retained cash you've
+  // ALREADY earned, plus scheduled NOI arriving before the next reserve bill,
+  // must cover that bill. Forward NOI RELIEVES how much of today's cash you must
+  // hold — it never adds to what you can give (you can't distribute rent you
+  // haven't collected). So the figure is capped at retained cash.
+  //   retainedCash      = cumulative ACTUAL operating NOI (year→period end) − distributed YTD
+  //   forwardNoi        = scheduled/booked operating NOI from period end → the next reserve bill
+  //   reserveShortfall  = the part of the upcoming bill forward NOI WON'T cover
+  //   runwayDistributable = retainedCash − reserveShortfall  (floored at 0)
+  const ytdRows = (await sql`
+    SELECT type, category, COALESCE(SUM(amount), 0)::float8 AS total
+    FROM transactions WHERE property_id = ${propertyId} AND status = 'actual'
+      AND txn_date BETWEEN ${yearStart} AND ${end}
+      AND COALESCE(is_deposit, FALSE) = FALSE
+    GROUP BY type, category
+  `) as { type: string; category: string; total: number }[]
+  let cumIncome = 0, cumOpEx = 0
+  for (const r of ytdRows) {
+    if (r.type === 'income') cumIncome += r.total
+    else if (!RESERVED_SET.has(r.category)) cumOpEx += r.total
+  }
+  const cumulativeActualNoi = cumIncome - cumOpEx
+
+  const distRows = (await sql`
+    SELECT COALESCE(SUM(amount), 0)::float8 AS total FROM distributions
+    WHERE property_id = ${propertyId} AND period LIKE ${period.slice(0, 4) + '-%'}
+  `) as { total: number }[]
+  const distributedYtd = distRows[0]?.total || 0
+  const retainedCash = cumulativeActualNoi - distributedYtd
+
+  const billDateRows = (await sql`
+    SELECT to_char(MAX(txn_date), 'YYYY-MM-DD') AS d FROM transactions
+    WHERE property_id = ${propertyId} AND status = 'forecast'
+      AND category IN ('Property Taxes', 'Insurance')
+      AND txn_date BETWEEN CURRENT_DATE AND (CURRENT_DATE + INTERVAL '6 months')
+  `) as { d: string | null }[]
+  const nextReserveBillDate = billDateRows[0]?.d || null
+
+  let forwardNoi = 0
+  if (nextReserveBillDate) {
+    const fwd = (await sql`
+      SELECT type, category, COALESCE(SUM(amount), 0)::float8 AS total
+      FROM transactions WHERE property_id = ${propertyId}
+        AND (status = 'actual' OR status = 'forecast')
+        AND txn_date > ${end} AND txn_date <= ${nextReserveBillDate}
+        AND COALESCE(is_deposit, FALSE) = FALSE
+      GROUP BY type, category
+    `) as { type: string; category: string; total: number }[]
+    let fi = 0, fe = 0
+    for (const r of fwd) {
+      if (r.type === 'income') fi += r.total
+      else if (!RESERVED_SET.has(r.category)) fe += r.total
+    }
+    forwardNoi = fi - fe
+  }
+  const reserveShortfall = Math.max(0, upcomingReserve - forwardNoi)
+  const projectedCashAfterBill = retainedCash + forwardNoi - upcomingReserve
+  const runwayDistributable = Math.max(0, retainedCash - reserveShortfall)
+
   // "Paid YTD" means actually paid — keep this actuals-only.
   const paidRows = (await sql`
     SELECT COALESCE(SUM(amount), 0)::float8 AS total
@@ -135,13 +198,15 @@ export async function computeQuarter(propertyId: number, period: string): Promis
 
   const split: OwnerSplit[] = owners.map((o) => {
     const pct = flipActive ? evenPct : parseFloat(o.ownership_pct)
-    return { owner_id: o.owner_id, name: o.name, pct, amount: distributableCash > 0 ? (distributableCash * pct) / 100 : 0 }
+    return { owner_id: o.owner_id, name: o.name, pct, amount: runwayDistributable > 0 ? (runwayDistributable * pct) / 100 : 0 }
   })
 
   return {
     label, start, end, q, income, opExpense, reservedExpense,
     operatingNet, allInNet, annualReserve, reserveTargetQuarter, distributable,
     upcomingReserve, distributableCash,
+    cumulativeActualNoi, distributedYtd, retainedCash, forwardNoi,
+    nextReserveBillDate, reserveShortfall, projectedCashAfterBill, runwayDistributable,
     reservedPaidYtd, reserveAccrued, reserveBalance, split, flipActive,
     scheduledIncluded, scheduledNet,
   }
