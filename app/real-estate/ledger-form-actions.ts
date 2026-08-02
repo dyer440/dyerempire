@@ -54,3 +54,56 @@ export async function editTransaction(formData: FormData) {
   `
   revalidatePath(`/real-estate/${propertyId}`)
 }
+
+// Record a deposit FORFEITURE (tenant's deposit is kept). Written as a two-leg
+// event linked by transfer_group — the double-entry-ready shape (Option A → B in
+// ARCHITECTURE): one journal entry, two balanced sides.
+//   Leg 1 — release liability: expense + is_deposit=TRUE. Excluded from P&L (all
+//           aggregations skip deposits), so it only DROPS "Deposits held".
+//   Leg 2 — recognize income: normal Rental Income, hits P&L.
+// Dated in the present (move-out month), so a closed prior period stays untouched.
+export async function forfeitDeposit(formData: FormData) {
+  const email = await getEditorEmail()
+  if (!email) throw new Error('You do not have permission to edit the books.')
+
+  const propertyId = Number(formData.get('property_id'))
+  const amount = Math.abs(Number(formData.get('amount')))
+  const txnDate = String(formData.get('txn_date') || '').trim()
+  const incomeCategory = String(formData.get('income_category') || 'Rental Income').trim() || 'Rental Income'
+  const note = String(formData.get('description') || '').trim()
+
+  if (!Number.isInteger(propertyId)) throw new Error('Bad request.')
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Amount must be greater than zero.')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(txnDate)) throw new Error('A valid date is required.')
+  if (await isDateClosed(propertyId, txnDate)) throw new Error('That date is in a closed period and is locked.')
+
+  // Can't forfeit more than is currently held.
+  const heldRows = (await sql`
+    SELECT COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END), 0)::float8 AS held
+    FROM transactions
+    WHERE property_id = ${propertyId} AND status = 'actual' AND COALESCE(is_deposit, FALSE) = TRUE
+  `) as { held: number }[]
+  const held = heldRows[0]?.held ?? 0
+  if (amount > held + 0.005) {
+    throw new Error(`Only $${held.toFixed(2)} in deposits is held for this property — can't forfeit more than that.`)
+  }
+
+  const group = `deposit-forfeit-${propertyId}-${Date.now()}`
+  const incomeDesc = note || 'Forfeited deposit — recognized as income'
+
+  // Leg 1 — release the held liability (invisible to P&L, reduces Deposits held).
+  await sql`
+    INSERT INTO transactions
+      (property_id, type, category, amount, txn_date, description, method, created_by, status, is_deposit, transfer_group)
+    VALUES (${propertyId}, 'expense', 'Security Deposit', ${amount}, ${txnDate},
+            'Deposit forfeiture — release of held liability', 'forfeiture', ${email}, 'actual', TRUE, ${group})
+  `
+  // Leg 2 — recognize the income (hits P&L).
+  await sql`
+    INSERT INTO transactions
+      (property_id, type, category, amount, txn_date, description, method, created_by, status, is_deposit, transfer_group)
+    VALUES (${propertyId}, 'income', ${incomeCategory}, ${amount}, ${txnDate},
+            ${incomeDesc}, 'forfeiture', ${email}, 'actual', FALSE, ${group})
+  `
+  revalidatePath(`/real-estate/${propertyId}`)
+}
