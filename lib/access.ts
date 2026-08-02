@@ -1,7 +1,8 @@
 // lib/access.ts  (REWRITE — adds canAccessPage)
 import sql from './db'
+import { ADMIN_EMAIL } from './constants'
 
-export const ADMIN_EMAIL = 'david.dyer.24@gmail.com'
+export { ADMIN_EMAIL }
 export type Role = 'admin' | 'manager' | 'partner' | 'viewer'
 
 export async function getUserRole(email: string): Promise<Role> {
