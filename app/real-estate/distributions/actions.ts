@@ -4,7 +4,7 @@ import sql from '@/lib/db'
 import { auth } from '@clerk/nextjs/server'
 import { revalidatePath } from 'next/cache'
 import { getUserRole, canEdit, canAccessProperty } from '@/lib/access'
-import { computeQuarter, isValidPeriod } from '@/lib/distributions'
+import { computeQuarter, isValidPeriod, lifetimeRetained } from '@/lib/distributions'
 
 async function guard(propertyId: number) {
   const { sessionClaims } = await auth()
@@ -16,7 +16,7 @@ async function guard(propertyId: number) {
 }
 
 // Record the distribution for a quarter. Splits a TOTAL across owners by ownership %.
-// - If the amount field is left BLANK, defaults to the smoothed distributable and
+// - If the amount field is left BLANK, defaults to the runway distributable and
 //   only records when that is positive.
 // - If the amount field is filled (including an explicit 0), that value is recorded
 //   as-is — so a "$0 distributed this quarter" can be logged. Negatives are ignored.
@@ -36,6 +36,28 @@ export async function recordDistribution(formData: FormData) {
   } else {
     total = c.runwayDistributable
     if (total <= 0) return // blank field: only auto-record a positive runway distributable
+  }
+
+  // OVER-DISTRIBUTION GUARD. Compare against LIFETIME retained cash (all-in net
+  // income ever earned, minus everything ever distributed) — not YTD, so paying
+  // out last year's Q4 profit in January doesn't false-positive. Recording a
+  // distribution larger than the property has ever actually earned means you're
+  // returning capital; that may be intentional, so this warns rather than blocks:
+  // re-submit with the "confirm over-distribution" box checked to proceed.
+  const prior = (await sql`
+    SELECT COALESCE(SUM(amount), 0)::float8 AS total FROM distributions
+    WHERE property_id = ${propertyId} AND period = ${period}
+  `) as { total: number }[]
+  const { retained } = await lifetimeRetained(propertyId)
+  // This period's existing record is being replaced, so add it back before comparing.
+  const available = retained + (prior[0]?.total || 0)
+  const acknowledged = String(formData.get('allow_over') || '') !== ''
+  if (total > available + 0.005 && !acknowledged) {
+    throw new Error(
+      `That distribution ($${total.toFixed(2)}) exceeds this property's lifetime retained cash ` +
+      `($${available.toFixed(2)}) — it would return partner capital. If that's intended, check ` +
+      `"confirm over-distribution" and submit again.`,
+    )
   }
 
   // Replace any prior record for this period (idempotent)
