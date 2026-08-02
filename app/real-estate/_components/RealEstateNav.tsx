@@ -20,6 +20,7 @@ import sql from '@/lib/db'
 import Link from 'next/link'
 import { auth } from '@clerk/nextjs/server'
 import { getUserRole, canEdit, getAccessibleProperties } from '@/lib/access'
+import NavAutoClose from './NavAutoClose'
 
 export default async function RealEstateNav() {
   const { sessionClaims } = await auth()
@@ -41,6 +42,7 @@ export default async function RealEstateNav() {
 
   return (
     <nav className="bg-zinc-950 border-b border-white/10 text-sm relative z-50">
+      <NavAutoClose />
       <div className="max-w-6xl mx-auto px-4 flex items-center gap-1">
         <Link href="/real-estate" className="py-3 pr-4 text-white font-semibold tracking-wide whitespace-nowrap">
           Dyer Empire <span className="text-white/40 font-normal">· Real Estate</span>
