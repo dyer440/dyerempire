@@ -1,4 +1,7 @@
-// middleware.ts  (HARDENED — email-claim fallback + case-insensitive allowlist)
+// proxy.ts  (renamed from middleware.ts for Next 16 — the `middleware` file
+//            convention is deprecated; `proxy` is the replacement. Contents are
+//            unchanged apart from importing ADMIN_EMAIL from lib/constants.)
+// HARDENED — email-claim fallback + case-insensitive allowlist
 // Change vs. prior version:
 //   1. If sessionClaims.email is missing (stale token / certain OAuth paths),
 //      fall back to resolving the primary email from Clerk by userId instead
@@ -9,8 +12,7 @@
 import { clerkMiddleware, createRouteMatcher, clerkClient } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 import { neon } from '@neondatabase/serverless'
-
-const ADMIN_EMAIL = 'david.dyer.24@gmail.com'
+import { ADMIN_EMAIL } from '@/lib/constants'
 
 // '/' is exact — only the homepage is public, not everything under it.
 const isPublicRoute = createRouteMatcher([
