@@ -53,9 +53,19 @@ export default async function RentRollPage({
     else unitsWithRent.add(s.unit_id)
   }
 
+  // Single-unit properties (SFH) always collapse to ONE whole-property column,
+  // regardless of whether a stray row landed on their lone unit. Only genuine
+  // multi-unit properties (duplexes) get per-unit columns.
+  const singleUnitProps = new Set<number>()
+  for (const p of properties) {
+    if ((unitsByProp[p.id] || []).length <= 1) singleUnitProps.add(p.id)
+  }
+
   const columns: RentColumn[] = []
   for (const p of properties) {
-    const unitCols = (unitsByProp[p.id] || []).filter((u) => unitsWithRent.has(u.id))
+    const unitCols = singleUnitProps.has(p.id)
+      ? []
+      : (unitsByProp[p.id] || []).filter((u) => unitsWithRent.has(u.id))
     if (unitCols.length === 0) {
       // Single whole-property column (SFH, or all rent booked at property level).
       columns.push({ key: `p${p.id}`, propertyId: p.id, unitId: null, propertyName: p.name, unitLabel: null, tenant: p.current_tenant })
@@ -90,7 +100,10 @@ export default async function RentRollPage({
 
   const cells: Record<string, RentPayment[]> = {}
   for (const p of pays) {
-    const key = `${p.property_id}:${p.unit_id ?? 'P'}:${p.period}`
+    // For single-unit properties, any rent (unit or NULL) belongs to the one
+    // whole-property column, so force the 'P' bucket — the single finish line.
+    const bucket = singleUnitProps.has(p.property_id) ? 'P' : (p.unit_id ?? 'P')
+    const key = `${p.property_id}:${bucket}:${p.period}`
     ;(cells[key] ||= []).push({
       id: p.id, amount: p.amount, date: p.date, status: p.status, isDeposit: p.is_deposit, locked: p.locked,
     })
