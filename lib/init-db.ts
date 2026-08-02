@@ -2,7 +2,26 @@
 //                  and transactions.schedule_id for confirm-in-place + regen dedup)
 import sql from './db'
 
-export async function initDb() {
+// RUN-ONCE GUARD. This module's DDL is idempotent but was executing on EVERY page
+// render (~50 statements per request) — pure latency and Neon compute for no gain.
+// The promise is cached at module scope, so the schema work runs at most once per
+// server instance (and concurrent callers await the same promise rather than
+// racing). A failed run clears the cache so the next request retries instead of
+// caching a broken state. To force a re-run after editing the schema below,
+// redeploy (a new instance = a fresh module).
+let initPromise: Promise<void> | null = null
+
+export async function initDb(): Promise<void> {
+  if (!initPromise) {
+    initPromise = runInit().catch((err) => {
+      initPromise = null // don't cache a failure — let the next request retry
+      throw err
+    })
+  }
+  return initPromise
+}
+
+async function runInit() {
   await sql`
     CREATE TABLE IF NOT EXISTS allowed_users (
       id SERIAL PRIMARY KEY,
@@ -211,6 +230,19 @@ export async function initDb() {
       property_id INTEGER REFERENCES properties(id) ON DELETE CASCADE,
       lease_id INTEGER REFERENCES leases(id) ON DELETE CASCADE,
       doc_type TEXT, filename TEXT, blob_url TEXT, uploaded_at TIMESTAMP DEFAULT NOW()
+    )
+  `
+
+  // Audit-flag dismissals: a duplicate-looking pair the user has confirmed is
+  // legitimate (e.g. two $375 rent halves from different payers in one month).
+  await sql`
+    CREATE TABLE IF NOT EXISTS reviewed_pairs (
+      id SERIAL PRIMARY KEY,
+      txn_id_a INTEGER NOT NULL,
+      txn_id_b INTEGER NOT NULL,
+      reviewed_by TEXT,
+      reviewed_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE (txn_id_a, txn_id_b)
     )
   `
 }
