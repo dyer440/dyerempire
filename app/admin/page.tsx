@@ -10,8 +10,15 @@ async function getUsers() {
   return await sql`SELECT * FROM allowed_users ORDER BY created_at DESC`
 }
 
+async function requireAdmin() {
+  const user = await currentUser()
+  const email = user?.emailAddresses[0]?.emailAddress
+  if (email !== ADMIN_EMAIL) throw new Error('Not authorized.')
+}
+
 async function addUser(formData: FormData) {
   'use server'
+  await requireAdmin()
   const email = formData.get('email') as string
   const name = formData.get('name') as string
   if (!email) return
@@ -24,6 +31,7 @@ async function addUser(formData: FormData) {
 
 async function removeUser(formData: FormData) {
   'use server'
+  await requireAdmin()
   const email = formData.get('email') as string
   if (!email || email === ADMIN_EMAIL) return
   await sql`DELETE FROM allowed_users WHERE email = ${email}`
