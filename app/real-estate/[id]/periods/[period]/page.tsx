@@ -77,10 +77,10 @@ export default async function PeriodDetailPage({
           <div className="text-white/30 text-xs tracking-widest uppercase mb-3">Quarter P&amp;L (actuals)</div>
           <Row label="Income" value={fmt(c.income)} tone="text-emerald-400" />
           <Row label="Operating expenses" value={`(${fmt(c.opExpense)})`} tone="text-rose-400" />
+          <Row label="Tax / insurance paid" value={`(${fmt(c.reservedExpense)})`} tone="text-rose-400" />
           <div className="border-t border-white/10 my-1" />
-          <Row label="Operating net" value={fmt(c.operatingNet)} tone={c.operatingNet >= 0 ? 'text-emerald-400' : 'text-amber-400'} />
-          <Row label="Tax / insurance paid this quarter" value={`(${fmt(c.reservedExpense)})`} tone="text-rose-400/70" dim />
-          <Row label="All-in net (incl. tax/insurance)" value={fmt(c.allInNet)} tone={c.allInNet >= 0 ? 'text-emerald-400/80' : 'text-amber-400'} dim />
+          <Row label="Net" value={fmt(c.allInNet)} tone={c.allInNet >= 0 ? 'text-emerald-400' : 'text-amber-400'} />
+          <Row label="Net before tax/insurance (operating)" value={fmt(c.operatingNet)} dim />
         </div>
 
         {/* Reserve */}
