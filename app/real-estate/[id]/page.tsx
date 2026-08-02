@@ -30,7 +30,7 @@ export default async function PropertyPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>
-  searchParams: Promise<{ from?: string; to?: string; all?: string }>
+  searchParams: Promise<{ month?: string; year?: string; all?: string }>
 }) {
   await auth.protect()
   const { id } = await params
@@ -60,11 +60,20 @@ export default async function PropertyPage({
     { id: number; label: string }[]
 
   // ---- Date range (scopes the merged ledger) ----
+  // Month-primary: default to the current month, prev/next step through months.
+  // Year and All are escape hatches. YTD cards below stay full-year regardless.
   const year = new Date().getFullYear()
   const isAll = sp.all === '1'
-  const isDefault = !isAll && !sp.from && !sp.to
-  const fromDate = isAll ? '1900-01-01' : (sp.from || `${year}-01-01`)
-  const toDate = isAll ? '2999-12-31' : (sp.to || `${year}-12-31`)
+  const yearFilter = /^\d{4}$/.test(sp.year || '') ? Number(sp.year) : null
+  const month = /^\d{4}-\d{2}$/.test(sp.month || '')
+    ? (sp.month as string)
+    : (isAll || yearFilter ? null : `${year}-${pad(new Date().getMonth() + 1)}`)
+  const fromDate = isAll ? '1900-01-01'
+    : yearFilter ? `${yearFilter}-01-01`
+    : monthRange(Number(month!.slice(0, 4)), Number(month!.slice(5, 7))).from
+  const toDate = isAll ? '2999-12-31'
+    : yearFilter ? `${yearFilter}-12-31`
+    : monthRange(Number(month!.slice(0, 4)), Number(month!.slice(5, 7))).to
 
   // ---- YTD totals in SQL (actuals, current year) — always full year regardless of filter ----
   const ytd = (await sql`
@@ -129,18 +138,17 @@ export default async function PropertyPage({
   const longDate = (d: string) =>
     new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 
-  // ---- Filter preset helpers ----
+  // ---- Filter helpers ----
   const base = `/real-estate/${propertyId}`
-  const yearActive = isDefault || (!isAll && sp.from === `${year}-01-01` && sp.to === `${year}-12-31`)
-  const lastActive = !isAll && sp.from === `${year - 1}-01-01` && sp.to === `${year - 1}-12-31`
+  const monthMode = !isAll && !yearFilter && !!month
+  const prevMonth = monthMode ? monthRange(Number(month!.slice(0, 4)), Number(month!.slice(5, 7)) - 1) : null
+  const nextMonth = monthMode ? monthRange(Number(month!.slice(0, 4)), Number(month!.slice(5, 7)) + 1) : null
+  const thisMonthStr = `${year}-${pad(new Date().getMonth() + 1)}`
+  const monthLabel = monthMode
+    ? new Date(`${month}-01T00:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    : isAll ? 'All time' : `${yearFilter}`
   const presetCls = (on: boolean) =>
     `text-xs tracking-widest uppercase transition-colors ${on ? 'text-white' : 'text-white/30 hover:text-white'}`
-
-  // Month stepper relative to current fromDate
-  const [fy, fmth] = fromDate.split('-').map(Number)
-  const prevM = monthRange(fy, fmth - 1)
-  const nextM = monthRange(fy, fmth + 1)
-  const thisM = monthRange(year, new Date().getMonth() + 1)
 
   // Group the merged list by month for a clean chronological scan.
   const groups: { key: string; label: string; items: Txn[] }[] = []
@@ -269,30 +277,29 @@ export default async function PropertyPage({
           </form>
         )}
 
-        {/* ---- Date filter (applies to the merged ledger) ---- */}
-        <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
-          <form method="get" className="flex items-end gap-2">
-            <div>
-              <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">From</label>
-              <input name="from" type="date" defaultValue={isAll ? '' : fromDate}
-                className="bg-white/5 border border-white/20 px-3 py-1.5 text-white text-xs focus:outline-none focus:border-white/50" />
-            </div>
-            <div>
-              <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">To</label>
-              <input name="to" type="date" defaultValue={isAll ? '' : toDate}
-                className="bg-white/5 border border-white/20 px-3 py-1.5 text-white text-xs focus:outline-none focus:border-white/50" />
-            </div>
-            <button type="submit" className="border border-white/30 px-4 py-1.5 text-xs tracking-widest uppercase hover:bg-white/10 transition-all">
-              Apply
-            </button>
-          </form>
+        {/* ---- Date filter: month-primary, with year / all escape hatches ---- */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-4">
+            {monthMode ? (
+              <>
+                <Link href={`${base}?month=${prevMonth!.from.slice(0, 7)}`} className={presetCls(false)}>◀ Prev</Link>
+                <span className="text-sm text-white tracking-widest uppercase tabular-nums min-w-[9rem] text-center">{monthLabel}</span>
+                <Link href={`${base}?month=${nextMonth!.from.slice(0, 7)}`} className={presetCls(false)}>Next ▶</Link>
+                {month !== thisMonthStr && (
+                  <Link href={`${base}?month=${thisMonthStr}`} className={presetCls(false)}>This Month</Link>
+                )}
+              </>
+            ) : (
+              <span className="text-sm text-white tracking-widest uppercase">{monthLabel}</span>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 justify-end">
-            <Link href={`${base}?from=${prevM.from}&to=${prevM.to}`} className={presetCls(false)}>◀ Prev</Link>
-            <Link href={`${base}?from=${thisM.from}&to=${thisM.to}`} className={presetCls(false)}>This Month</Link>
-            <Link href={`${base}?from=${nextM.from}&to=${nextM.to}`} className={presetCls(false)}>Next ▶</Link>
+            {!monthMode && (
+              <Link href={`${base}?month=${thisMonthStr}`} className={presetCls(false)}>Months</Link>
+            )}
             <span className="text-white/15">|</span>
-            <Link href={`${base}?from=${year}-01-01&to=${year}-12-31`} className={presetCls(yearActive)}>This Year</Link>
-            <Link href={`${base}?from=${year - 1}-01-01&to=${year - 1}-12-31`} className={presetCls(lastActive)}>Last Year</Link>
+            <Link href={`${base}?year=${year}`} className={presetCls(yearFilter === year)}>{year}</Link>
+            <Link href={`${base}?year=${year - 1}`} className={presetCls(yearFilter === year - 1)}>{year - 1}</Link>
             <Link href={`${base}?all=1`} className={presetCls(isAll)}>All</Link>
           </div>
         </div>
