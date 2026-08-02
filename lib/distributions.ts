@@ -41,7 +41,6 @@ export type QuarterComputation = {
   income: number; opExpense: number; reservedExpense: number
   operatingNet: number; allInNet: number
   annualReserve: number; reserveTargetQuarter: number
-  distributable: number
   upcomingReserve: number; distributableCash: number
   cumulativeActualNoi: number; distributedYtd: number; retainedCash: number
   forwardNoi: number; nextReserveBillDate: string | null
@@ -97,15 +96,15 @@ export async function computeQuarter(propertyId: number, period: string): Promis
   const scheduledIncluded = scheduledNet !== 0
 
   const annualReserve = await reserveTargetAnnual(propertyId)
-  const reserveTargetQuarter = annualReserve / 4
-  const distributable = operatingNet - reserveTargetQuarter
+  const reserveTargetQuarter = annualReserve / 4 // reserve ACCRUAL tracking only (not a distributable)
 
+  // removed after it under-held a real tax bill — reserve accrual stats remain below.)
   // Forward-looking CASH reserve: this property's own scheduled tax/insurance due
   // in the next 6 months. Since bills are paid lump-sum out of held cash (not
   // pre-accrued into a reserve account), THIS is what must actually stay put
   // before distributing — the real "hold the next bill" number, distinct from the
   // smoothed annual/4 above. distributableCash is the conservative, cash-true
-  // recommendation; `distributable` (smoothed) is kept as an accrual-basis reference.
+  // recommendation. (A smoothed annual/4 'distributable' used to live here; it was
   const upcomingRows = (await sql`
     SELECT COALESCE(SUM(amount), 0)::float8 AS total
     FROM transactions
@@ -206,11 +205,36 @@ export async function computeQuarter(propertyId: number, period: string): Promis
 
   return {
     label, start, end, q, income, opExpense, reservedExpense,
-    operatingNet, allInNet, annualReserve, reserveTargetQuarter, distributable,
+    operatingNet, allInNet, annualReserve, reserveTargetQuarter,
     upcomingReserve, distributableCash,
     cumulativeActualNoi, distributedYtd, retainedCash, forwardNoi,
     nextReserveBillDate, reserveShortfall, projectedCashAfterBill, runwayDistributable,
     reservedPaidYtd, reserveAccrued, reserveBalance, split, flipActive,
     scheduledIncluded, scheduledNet,
   }
+}
+
+/**
+ * Lifetime retained cash for a property: cumulative ALL-IN actual net income
+ * (income − every expense, incl. tax/insurance, deposits excluded) minus every
+ * distribution ever recorded. This is the correct basis for an over-distribution
+ * check — unlike the YTD `retainedCash` on a quarter, it doesn't false-positive
+ * when a January distribution pays out the prior year's Q4 profit.
+ */
+export async function lifetimeRetained(propertyId: number): Promise<{
+  netIncome: number; distributed: number; retained: number
+}> {
+  const rows = (await sql`
+    SELECT COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END), 0)::float8 AS net
+    FROM transactions
+    WHERE property_id = ${propertyId} AND status = 'actual'
+      AND COALESCE(is_deposit, FALSE) = FALSE
+  `) as { net: number }[]
+  const distRows = (await sql`
+    SELECT COALESCE(SUM(amount), 0)::float8 AS total
+    FROM distributions WHERE property_id = ${propertyId}
+  `) as { total: number }[]
+  const netIncome = rows[0]?.net || 0
+  const distributed = distRows[0]?.total || 0
+  return { netIncome, distributed, retained: netIncome - distributed }
 }
