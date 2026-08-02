@@ -8,7 +8,7 @@ import { getUserRole, canAccessProperty, canEdit } from '@/lib/access'
 import { INCOME_CATEGORIES, EXPENSE_CATEGORIES } from '@/lib/categories'
 import { addTransaction, deleteTransaction } from '../actions'
 import { markForecastPaid, deleteForecast } from '../recurring/actions'
-import { editTransaction } from '../ledger-form-actions'
+import { editTransaction, forfeitDeposit } from '../ledger-form-actions'
 
 type Txn = {
   id: number; type: string; category: string; amount: string; txn_date: string
@@ -238,9 +238,44 @@ export default async function PropertyPage({
 
         {/* Deposits held — a liability, not income. Excluded from all P&L above. */}
         {depositsHeld > 0 && (
-          <div className="border border-white/10 p-4 mb-8 flex items-center justify-between">
-            <div className="text-white/40 text-xs tracking-widest uppercase">Deposits held · liability (excluded from income)</div>
-            <div className="text-lg text-white/70" style={{ fontFamily: 'Georgia, serif' }}>{fmt(depositsHeld)}</div>
+          <div className="border border-white/10 p-4 mb-8">
+            <div className="flex items-center justify-between">
+              <div className="text-white/40 text-xs tracking-widest uppercase">Deposits held · liability (excluded from income)</div>
+              <div className="text-lg text-white/70" style={{ fontFamily: 'Georgia, serif' }}>{fmt(depositsHeld)}</div>
+            </div>
+            {editable && (
+              <details className="mt-3 border-t border-white/5 pt-3">
+                <summary className="cursor-pointer text-[11px] text-white/40 hover:text-white/70 tracking-widest uppercase select-none">
+                  Record a forfeiture (deposit kept)
+                </summary>
+                <form action={forfeitDeposit} className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 items-end">
+                  <input type="hidden" name="property_id" value={prop.id} />
+                  <div>
+                    <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">Amount</label>
+                    <input name="amount" type="number" step="0.01" min="0.01" max={depositsHeld} defaultValue={depositsHeld.toFixed(2)} required className={editFieldCls} />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">Date kept</label>
+                    <input name="txn_date" type="date" defaultValue={todayStr} required className={editFieldCls} />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-white/30 tracking-widest uppercase mb-1">Recognize as</label>
+                    <select name="income_category" defaultValue="Rental Income" className={editFieldCls}>
+                      <option value="Rental Income">Rental Income</option>
+                      <option value="Other Income">Other Income</option>
+                    </select>
+                  </div>
+                  <input name="description" type="text" placeholder="e.g. unpaid final month + damages" className={editFieldCls} />
+                  <button type="submit" className="border border-white/30 px-4 py-1.5 text-xs tracking-widest uppercase hover:bg-white/10 transition-all md:col-span-1">
+                    Record forfeiture
+                  </button>
+                </form>
+                <p className="text-[10px] text-white/25 mt-2 max-w-lg leading-relaxed">
+                  Books two linked entries dated now: releases the held liability and recognizes the amount as
+                  income. The original deposit and any closed period stay untouched.
+                </p>
+              </details>
+            )}
           </div>
         )}
 
