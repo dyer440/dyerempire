@@ -1067,6 +1067,17 @@ describe('SL Media: The Coal Trader', () => {
     const no = await call(MediaVoid.POST, { method: 'POST', params: { kind: 'payout', id: String(tied.id) }, body: { confirm: true, reason: 'x' } })
     expect(no.json.error!.code).toBe('bank_reconciled')
   })
+  it('update_media_entries relabels a deposit and is logged', async () => {
+    const [r] = await q(`SELECT id FROM media_receipts WHERE source = 'substack' LIMIT 1`)
+    const u = await mcp({ jsonrpc: '2.0', id: 42, method: 'tools/call', params: { name: 'update_media_entries', arguments: { entries: [{ kind: 'receipt', id: r.id, source: 'website', note: 'relabelled' }] } } })
+    expect(JSON.parse(u.json.result.content[0].text)).toEqual({ updated: 1 })
+    const [after] = await q('SELECT source, note FROM media_receipts WHERE id = $1', [r.id])
+    expect(after).toEqual({ source: 'website', note: 'relabelled' })
+    const bad = await mcp({ jsonrpc: '2.0', id: 43, method: 'tools/call', params: { name: 'update_media_entries', arguments: { entries: [{ kind: 'receipt', id: r.id, source: 'seawolf' }] } } })
+    expect(bad.json.result.isError).toBe(true)
+    const [log] = await q(`SELECT action FROM mutations_log WHERE target_table = 'media_receipts' AND target_id = $1 ORDER BY id DESC LIMIT 1`, [r.id])
+    expect(log.action).toBe('media.update')
+  })
   it('the MCP catalogue carries the media tools', async () => {
     const full = await mcp({ jsonrpc: '2.0', id: 40, method: 'tools/list' })
     const names = full.json.result.tools.map((t: any) => t.name)

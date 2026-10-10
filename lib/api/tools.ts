@@ -16,7 +16,7 @@ import { describeSchema } from './schema'
 import { listBookNotes, resolveBookNote } from './notes'
 import { voidTransaction } from './void'
 import { listLeasesApi, upsertLease, endLease } from './leases'
-import { getMediaLedger, postMediaBankTxn, recordMediaEntries, voidMediaEntry } from './media'
+import { getMediaLedger, postMediaBankTxn, recordMediaEntries, voidMediaEntry, updateMediaEntries } from './media'
 import { runReadOnlySql } from './sql-runner'
 import { badRequest } from './errors'
 import type { Input } from './validate'
@@ -576,6 +576,17 @@ export const TOOLS: Tool[] = [
     }, ['entries']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     run: (a, who) => recordMediaEntries(a, who),
+  },
+  {
+    name: 'update_media_entries',
+    title: 'Correct media entry labels',
+    description:
+      'Fix labels on existing media entries: a deposit\'s source or revenue month, a payment\'s destination, or the note on either. ' +
+      'Amounts and dates are not changed here. Each entry: { kind: receipt|payout, id, source?, period?, destination?, note? }.',
+    scope: 'write',
+    inputSchema: obj({ entries: { type: 'array', maxItems: 400, items: { type: 'object' } } }, ['entries']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: (a, who) => updateMediaEntries(a, who),
   },
   {
     name: 'void_media_entry',

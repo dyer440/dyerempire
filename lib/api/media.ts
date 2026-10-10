@@ -13,7 +13,7 @@
 //                          that went to personal checking)
 //   void_media_entry       write: remove a mistaken entry that has no bank line
 import sql from '@/lib/db'
-import { ensureMedia, getProduct, productLedger, SOURCE_LABEL, type Product } from '@/lib/media'
+import { ensureMedia, getProduct, listProducts, productLedger, SOURCE_LABEL, type Product } from '@/lib/media'
 import { badRequest, conflict, notFound } from './errors'
 import { type Actor, refreshUi } from './service'
 import { postBankTxn, excludeBankTxn, revertBankTxn, bankResult } from './bank-post'
@@ -285,3 +285,58 @@ export async function voidMediaEntry(input: Input, who: Actor) {
   return { voided: true, kind, id, reason }
 }
 
+
+// ─── corrections ─────────────────────────────────────────────────────────────
+
+/**
+ * Correct labels on existing entries: source and revenue month on deposits,
+ * destination on payments, and the note on either. Amounts and dates are not
+ * editable here; they come from the bank (or void and re-record a sheet row).
+ */
+export async function updateMediaEntries(input: Input, who: Actor) {
+  await ensureMedia()
+  const raw = Array.isArray(input.entries) ? (input.entries as Input[]) : null
+  if (!raw || !raw.length) throw badRequest('entries is required: [{ kind, id, source?, period?, destination?, note? }].')
+  if (raw.length > 400) throw badRequest('At most 400 entries per call.')
+  const products = new Map((await listProducts()).map((p) => [p.id, p]))
+  const stmts: { kind: 'receipt' | 'payout'; id: number; source: string | null; period: string | null; destination: string | null; note: string | null; hasNote: boolean }[] = []
+  for (const [i, e] of raw.entries()) {
+    const kind = optEnum(e, 'kind', ['receipt', 'payout'] as const)
+    if (!kind) throw badRequest(`entries[${i}].kind must be receipt or payout.`)
+    const id = reqInt(e, 'id')
+    const source = optString(e, 'source', 20)
+    const period = optPeriod(e)
+    const destination = optString(e, 'destination', 100)
+    const hasNote = Object.prototype.hasOwnProperty.call(e, 'note')
+    const note = optString(e, 'note', 300)
+    if (kind === 'payout' && (source || period)) throw badRequest(`entries[${i}]: payments have no source or period.`)
+    if (kind === 'receipt' && destination) throw badRequest(`entries[${i}]: deposits have no destination.`)
+    if (source) {
+      const row = (await sql`SELECT product_id FROM media_receipts WHERE id = ${id}`) as { product_id: number }[]
+      if (!row[0]) throw notFound(`No receipt ${id}.`)
+      if (!products.get(row[0].product_id)?.sources.includes(source)) throw badRequest(`entries[${i}]: ${source} is not a source for that product.`)
+    }
+    stmts.push({ kind, id, source, period, destination, note, hasNote })
+  }
+  const res = (await sql.transaction((tx) => stmts.map((s) => s.kind === 'receipt'
+    ? tx`
+        WITH b AS (SELECT * FROM media_receipts WHERE id = ${s.id}),
+        u AS (UPDATE media_receipts SET source = COALESCE(${s.source}, source), period = COALESCE(${s.period}, period),
+                     note = CASE WHEN ${s.hasNote} THEN ${s.note} ELSE note END
+              WHERE id = ${s.id} RETURNING *),
+        l AS (INSERT INTO mutations_log (actor, api_key_id, source, action, target_table, target_id, before, after)
+              SELECT ${who.actor}, ${who.keyId}, ${who.source}, 'media.update', 'media_receipts', u.id, (SELECT to_jsonb(b) FROM b), to_jsonb(u) FROM u)
+        SELECT id FROM u`
+    : tx`
+        WITH b AS (SELECT * FROM media_payouts WHERE id = ${s.id}),
+        u AS (UPDATE media_payouts SET destination = COALESCE(${s.destination}, destination),
+                     note = CASE WHEN ${s.hasNote} THEN ${s.note} ELSE note END
+              WHERE id = ${s.id} RETURNING *),
+        l AS (INSERT INTO mutations_log (actor, api_key_id, source, action, target_table, target_id, before, after)
+              SELECT ${who.actor}, ${who.keyId}, ${who.source}, 'media.update', 'media_payouts', u.id, (SELECT to_jsonb(b) FROM b), to_jsonb(u) FROM u)
+        SELECT id FROM u`))) as Row[][]
+  const missing = stmts.filter((_, i) => !res[i].length).map((s) => `${s.kind} ${s.id}`)
+  if (missing.length) return { updated: stmts.length - missing.length, not_found: missing }
+  refreshUi()
+  return { updated: stmts.length }
+}
