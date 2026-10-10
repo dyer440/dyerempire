@@ -1,22 +1,26 @@
 // app/_site/SiteFrame.tsx
 // The signed-in site frame: a light page, one row of links and the account
-// button. Used by /real-estate and /admin so they look like one site.
+// button. Used by /real-estate, /media and /admin so they look like one site.
+// Links depend on who is looking: a page-access user (Matt) sees only his pages.
 import Link from 'next/link'
 import { UserButton } from '@clerk/nextjs'
-import { getViewer } from '@/lib/viewer'
+import { getSiteUser } from '@/lib/viewer'
 import NavLinks, { type NavItem } from './NavLinks'
 
 export default async function SiteFrame({ children }: { children: React.ReactNode }) {
-  const v = await getViewer()
-  const items: NavItem[] = [
-    { href: '/real-estate', label: 'Properties', match: ['/real-estate', '^/real-estate/\\d+'] },
-    { href: '/real-estate/rent', label: 'Rent roll', match: ['/real-estate/rent'] },
-  ]
-  if (v.insider) {
-    items.push({ href: '/real-estate/companies', label: 'Companies', match: ['/real-estate/companies*'] })
-    items.push({ href: '/real-estate/notes', label: 'Notes', match: ['/real-estate/notes'] })
+  const u = await getSiteUser()
+  const items: NavItem[] = []
+  if (u.realEstate) {
+    items.push({ href: '/real-estate', label: 'Properties', match: ['/real-estate', '^/real-estate/\\d+'] })
+    items.push({ href: '/real-estate/rent', label: 'Rent roll', match: ['/real-estate/rent'] })
   }
-  if (v.role === 'admin') items.push({ href: '/admin', label: 'Admin', match: ['/admin'] })
+  if (u.insider) {
+    items.push({ href: '/real-estate/companies', label: 'Companies', match: ['/real-estate/companies*', '/media*'] })
+    items.push({ href: '/real-estate/notes', label: 'Notes', match: ['/real-estate/notes'] })
+  } else if (u.pages.includes('media-tct')) {
+    items.push({ href: '/media/tct', label: 'The Coal Trader', match: ['/media/tct'] })
+  }
+  if (u.role === 'admin') items.push({ href: '/admin', label: 'Admin', match: ['/admin'] })
 
   return (
     <div className="site min-h-screen bg-paper text-ink">

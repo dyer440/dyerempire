@@ -23,6 +23,7 @@
 // with the Import screen can never double-post. The last statement writes the
 // mutations_log row.
 import sql from '@/lib/db'
+import { ensureMedia } from '@/lib/media'
 import { badRequest, conflict, notFound, pgCode } from './errors'
 import { type Actor, isDateClosed, closedError, resolveCategory, refreshUi } from './service'
 import { type Input, reqInt, optInt, optString, optBool, optRentalPeriod, optAmount } from './validate'
@@ -285,6 +286,7 @@ export async function revertBankTxn(input: Input, who: Actor) {
   for (const t of touched) if (await isDateClosed(t.property_id, t.d)) throw closedError(t.d)
 
   const before = await bankResult(bankId)
+  await ensureMedia()
   await atomic(bankId, (tx) => [
     tx`SELECT 1 / (CASE WHEN status <> 'pending' THEN 1 ELSE 0 END) FROM bank_txns WHERE id = ${bankId} FOR UPDATE`,
     tx`
@@ -303,6 +305,12 @@ export async function revertBankTxn(input: Input, who: Actor) {
         SELECT transaction_id FROM bank_txn_legs WHERE bank_txn_id = ${bankId} AND link_type = 'confirmed')
     `,
     tx`DELETE FROM bank_txn_legs WHERE bank_txn_id = ${bankId}`,
+    // SL Media's publication ledger (lib/media.ts): entries this bank line created
+    // go; entries typed in from the spreadsheet and later tied to it are untied.
+    tx`DELETE FROM media_receipts WHERE bank_txn_id = ${bankId} AND origin = 'bank'`,
+    tx`DELETE FROM media_payouts WHERE bank_txn_id = ${bankId} AND origin = 'bank'`,
+    tx`UPDATE media_receipts SET bank_txn_id = NULL WHERE bank_txn_id = ${bankId}`,
+    tx`UPDATE media_payouts SET bank_txn_id = NULL WHERE bank_txn_id = ${bankId}`,
     tx`UPDATE bank_txns SET status = 'pending', exclude_reason = NULL, resolved_by = NULL, resolved_at = NULL WHERE id = ${bankId}`,
   ])
   refreshUi()

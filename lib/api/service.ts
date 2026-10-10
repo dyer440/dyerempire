@@ -73,6 +73,10 @@ async function categoryKinds(): Promise<Map<string, 'income' | 'expense'>> {
   // has a row for them. Loan Principal: cash out, excluded from the tax rollup
   // (lib/form8825.ts NON_PL_CATEGORIES). Used for the principal leg of loan payments.
   if (!map.has('Loan Principal')) map.set('Loan Principal', 'expense')
+  // SL Media's publication books (lib/media.ts).
+  if (!map.has('Subscription Revenue')) map.set('Subscription Revenue', 'income')
+  if (!map.has('Royalty Income')) map.set('Royalty Income', 'income')
+  if (!map.has('Licensing Fees')) map.set('Licensing Fees', 'expense')
   return map
 }
 

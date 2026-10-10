@@ -15,6 +15,7 @@ import { recordDistribution, closePeriod, reopenPeriod } from './periods'
 import { describeSchema } from './schema'
 import { listBookNotes, resolveBookNote } from './notes'
 import { voidTransaction } from './void'
+import { getMediaLedger, postMediaBankTxn, recordMediaEntries, voidMediaEntry } from './media'
 import { runReadOnlySql } from './sql-runner'
 import { badRequest } from './errors'
 import type { Input } from './validate'
@@ -522,6 +523,70 @@ export const TOOLS: Tool[] = [
     }, ['id', 'status', 'reply']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     run: (a, who) => resolveBookNote(a, who),
+  },
+  {
+    name: 'get_media_ledger',
+    title: 'SL Media publication ledger',
+    description:
+      "The Coal Trader (product 'tct', default) or The REE Trader ('ree'). Revenue by month (Substack and thecoaltrader.com), " +
+      "Seawolf's 87.5% and SL Media's 12.5% royalty, what has been paid to Seawolf (Matt Warder) and moved to SL Holdings, " +
+      'what is still owed, the next Zelle amounts (max $10,000 each), and calendar-year totals (the 1099 figure is years[].partnerPaid).',
+    scope: 'read',
+    inputSchema: obj({
+      product: { type: 'string', enum: ['tct', 'ree'] },
+      months: { type: 'integer', minimum: 1, maximum: 120, description: 'How many recent months to list (default 12)' },
+    }),
+    annotations: READ,
+    run: (a) => getMediaLedger(a),
+  },
+  {
+    name: 'post_media_bank_txn',
+    title: 'Post an SL Media bank line',
+    description:
+      'Post one pending bank row from SL Media checking. kind: substack | website (subscriber money in for The Coal Trader), ' +
+      'ree (Seawolf paying SL Media for The REE Trader), pay_partner (Zelle to Seawolf / Matt Warder), pay_owner (royalty moved ' +
+      'to SL Holdings). Posts SL Media\'s books and the media ledger together. If the money was already typed in from the ' +
+      'spreadsheet it is linked, not doubled; when that is unclear the call returns check_existing with candidates, and you ' +
+      'resend with link_entry_id or create_new: true. period (YYYY-MM) sets the revenue month for deposits; default is the bank month.',
+    scope: 'write',
+    inputSchema: obj({
+      bank_txn_id: int('Pending bank row id'),
+      kind: { type: 'string', enum: ['substack', 'website', 'ree', 'pay_partner', 'pay_owner'] },
+      period: { type: 'string', pattern: '^\\d{4}-\\d{2}$', description: 'Revenue month for a deposit' },
+      destination: str('pay_owner only, if not SL Holdings'),
+      link_entry_id: int('Existing media entry this bank row is'),
+      create_new: { type: 'boolean', description: 'This is new money, not an existing entry' },
+    }, ['bank_txn_id', 'kind']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    run: (a, who) => postMediaBankTxn(a, who),
+  },
+  {
+    name: 'record_media_entries',
+    title: 'Record media entries without a bank line',
+    description:
+      'Add deposits or payments that will never appear in SL Media checking (e.g. REE money sent straight to personal checking), ' +
+      'or history. Each entry: { kind: receipt, source, amount, date, period? } or { kind: payout, payee: partner|owner, amount, date, destination? }. ' +
+      'import_key makes a retry safe. Does not touch SL Media\'s books.',
+    scope: 'write',
+    inputSchema: obj({
+      product: { type: 'string', enum: ['tct', 'ree'] },
+      origin: { type: 'string', enum: ['sheet', 'manual'] },
+      entries: { type: 'array', maxItems: 400, items: { type: 'object' } },
+    }, ['entries']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: (a, who) => recordMediaEntries(a, who),
+  },
+  {
+    name: 'void_media_entry',
+    title: 'Remove a media entry',
+    description: 'Remove a mistaken media receipt or payout that is not tied to a bank row. Needs confirm: true and a reason.',
+    scope: 'write',
+    inputSchema: obj({
+      kind: { type: 'string', enum: ['receipt', 'payout'] }, id: int('Entry id'),
+      confirm: { type: 'boolean' }, reason: str('Why'),
+    }, ['kind', 'id', 'confirm', 'reason']),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    run: (a, who) => voidMediaEntry(a, who),
   },
 ]
 

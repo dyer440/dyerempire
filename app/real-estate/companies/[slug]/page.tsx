@@ -6,6 +6,8 @@ import { getViewer } from '@/lib/viewer'
 import { listCompanies, companyCategoryYear, activity, activityYears } from '@/lib/views'
 import { money } from '@/lib/format'
 import ActivityList from '../../_ui/ActivityList'
+import Link from 'next/link'
+import { MEDIA_ENTITY_SLUG, listProducts, productLedger } from '@/lib/media'
 
 export default async function Company({
   params, searchParams,
@@ -28,6 +30,9 @@ export default async function Company({
     companyCategoryYear(c.id, year),
     activity({ entityId: c.id, year, search }),
   ])
+  const publications = c.slug === MEDIA_ENTITY_SLUG
+    ? await Promise.all((await listProducts()).map(async (p) => ({ p, L: (await productLedger(p.slug))!.ledger })))
+    : []
   const income = cats.filter((r) => r.type === 'income')
   const expense = cats.filter((r) => r.type === 'expense')
   const tIn = income.reduce((t, r) => t + r.total, 0)
@@ -39,6 +44,38 @@ export default async function Company({
         <h1 className="font-serif text-4xl font-medium tracking-tight">{c.name}</h1>
         {c.legal_name && c.legal_name !== c.name && <p className="mt-1 text-[15px] text-muted">{c.legal_name}</p>}
       </header>
+
+      {publications.length > 0 && (
+        <section aria-labelledby="pub-h">
+          <h2 id="pub-h" className="font-serif text-2xl">Publications</h2>
+          <ul className="mt-4 grid gap-4 md:grid-cols-2">
+            {publications.map(({ p, L }) => (
+              <li key={p.slug}>
+                <Link href={`/media/${p.slug}`} className="block rounded-lg border border-rule bg-surface p-5 hover:border-ink/30">
+                  <h3 className="font-serif text-2xl">{p.name}</h3>
+                  <dl className="mt-3 grid grid-cols-2 gap-3 text-[14px]">
+                    <div>
+                      <dt className="text-muted">Latest month</dt>
+                      <dd className="num mt-0.5 text-[15px] font-medium">{L.months[0] ? money(L.months[0].gross) : 'None'}</dd>
+                    </div>
+                    {p.owner_pct < 100 ? (
+                      <div>
+                        <dt className="text-muted">Owed to {p.partner_name?.replace(/\s*\(.*\)$/, '')}</dt>
+                        <dd className={`num mt-0.5 text-[15px] font-medium ${L.totals.partnerDue > 0.004 ? 'text-due' : 'text-paid'}`}>{L.totals.partnerDue > 0.004 ? money(L.totals.partnerDue) : 'Paid up'}</dd>
+                      </div>
+                    ) : (
+                      <div>
+                        <dt className="text-muted">Received this year</dt>
+                        <dd className="num mt-0.5 text-[15px] font-medium">{money(L.years.find((y) => y.year === new Date().getFullYear())?.received ?? 0)}</dd>
+                      </div>
+                    )}
+                  </dl>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section aria-labelledby="cat-h">
         <h2 id="cat-h" className="font-serif text-2xl">{year === thisYear ? `${year} so far` : year}</h2>

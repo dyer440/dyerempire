@@ -41,6 +41,11 @@ import * as Mcp from '@/app/api/mcp/route'
 import * as Notes from '@/app/api/v1/notes/route'
 import * as NoteResolve from '@/app/api/v1/notes/[id]/resolve/route'
 import * as Void from '@/app/api/v1/transactions/[id]/void/route'
+import * as MediaGet from '@/app/api/v1/media/[product]/route'
+import * as MediaEntries from '@/app/api/v1/media/[product]/entries/route'
+import * as MediaPost from '@/app/api/v1/media/bank/[id]/post/route'
+import * as MediaVoid from '@/app/api/v1/media/entries/[kind]/[id]/void/route'
+import * as BankRevertRoute from '@/app/api/v1/bank/[id]/revert/route'
 import { addNote } from '@/lib/notes'
 
 const OWNER_URL = process.env.DATABASE_URL!
@@ -126,6 +131,8 @@ beforeAll(async () => {
 
   const [slcm] = await q(`INSERT INTO entities (slug, name, type) VALUES ('slcm','Second Line Capital Management LLC','management_co') RETURNING id`)
   const [hold] = await q(`INSERT INTO entities (slug, name, type) VALUES ('913-llc','913 LLC','holding_co') RETURNING id`)
+  const [media] = await q(`INSERT INTO entities (slug, name, type, status) VALUES ('sl-media','SL Media','operating_co','active') RETURNING id`)
+  ids.media = media.id
   const [pA] = await q(`INSERT INTO properties (name, entity_id, status) VALUES ('913', $1, 'active') RETURNING id`, [hold.id])
   const [pB] = await q(`INSERT INTO properties (name, entity_id, status) VALUES ('Belford', $1, 'active') RETURNING id`, [slcm.id])
   const [unitA] = await q(`INSERT INTO units (property_id, label) VALUES ($1, 'Unit 1') RETURNING id`, [pA.id])
@@ -940,5 +947,129 @@ describe('void_transaction', () => {
     const cl = await call(Void.POST, { method: 'POST', params: { id: String(closed.id) }, body: { confirm: true, reason: 'x' } })
     expect(cl.json.error!.code).toBe('period_closed')
     expect((await call(Void.POST, { method: 'POST', params: { id: '999999' }, body: { confirm: true, reason: 'x' } })).status).toBe(404)
+  })
+})
+
+describe('SL Media: The Coal Trader', () => {
+  const bankRow = async (amount: number, date: string, name: string) => {
+    const [r] = await q(`INSERT INTO bank_txns (account_id, txn_date, amount, name_raw, name_norm, import_hash)
+                         VALUES ((SELECT min(id) FROM bank_accounts), $1, $2, $3, $3, md5(random()::text)) RETURNING id`, [date, amount, name])
+    return String(r.id)
+  }
+  const post = (id: string, body: Record<string, unknown>, key?: string) =>
+    call(MediaPost.POST, { method: 'POST', params: { id }, body, ...(key ? { key } : {}) })
+  const ledger = async () => (await call(MediaGet.GET, { params: { product: 'tct' }, path: '/api/v1/media/tct?months=24' })).json.data
+
+  it('records spreadsheet history once, safely retried', async () => {
+    const entries = [
+      { kind: 'receipt', source: 'substack', amount: 4673.46, date: '2026-08-31', period: '2026-08', import_key: 'sheet:134:D:1' },
+      { kind: 'receipt', source: 'substack', amount: 344.24, date: '2026-08-31', period: '2026-08', import_key: 'sheet:134:D:2' },
+      { kind: 'receipt', source: 'website', amount: 14571.95, date: '2026-08-31', period: '2026-08', import_key: 'sheet:134:F:1' },
+      { kind: 'payout', payee: 'partner', amount: 10000, date: '2026-08-31', import_key: 'sheet:131:J' },
+      { kind: 'payout', payee: 'owner', amount: 2448.71, date: '2026-08-31', import_key: 'sheet:134:N' },
+    ]
+    const r1 = await call(MediaEntries.POST, { method: 'POST', params: { product: 'tct' }, body: { origin: 'sheet', entries } })
+    expect(r1.status).toBe(201)
+    expect(r1.json.data).toMatchObject({ sent: 5, created: 5 })
+    const r2 = await call(MediaEntries.POST, { method: 'POST', params: { product: 'tct' }, body: { origin: 'sheet', entries } })
+    expect(r2.json.data).toMatchObject({ created: 0, skipped_already_recorded: 5 })
+    const L = await ledger()
+    expect(L.months[0]).toMatchObject({ period: '2026-08', gross: 19589.65, partner: { share: 17140.94, paid: 10000, due: 7140.94 } })
+    expect(L.balances).toMatchObject({ owed_to_partner: 7140.94, royalty_not_yet_moved: 0 })
+    expect(L.next_partner_payments).toEqual([7140.94])
+    expect(L.not_tied_to_bank).toEqual({ receipts: 3, payouts: 2 })
+  })
+  it('rejects bad entries', async () => {
+    const bad = await call(MediaEntries.POST, { method: 'POST', params: { product: 'tct' }, body: { entries: [{ kind: 'receipt', source: 'seawolf', amount: 1, date: '2026-08-01' }] } })
+    expect(bad.status).toBe(400)
+    expect((await call(MediaEntries.POST, { method: 'POST', key: keys.read, params: { product: 'tct' }, body: { entries: [] } })).status).toBe(403)
+  })
+  it('a bank deposit that matches a spreadsheet row is linked, and posted to SL Media books', async () => {
+    const id = await bankRow(14571.95, '2026-09-01', 'STRIPE TRANSFER')
+    const r = await post(id, { kind: 'website' })
+    expect(r.json.ok).toBe(true)
+    expect(r.json.data.media.linked_existing).toBe(true)
+    const [t] = await q(`SELECT t.category, t.type, t.entity_id, t.property_id, b.status FROM bank_txn_legs l
+                         JOIN transactions t ON t.id = l.transaction_id JOIN bank_txns b ON b.id = l.bank_txn_id WHERE l.bank_txn_id = $1`, [id])
+    expect(t).toMatchObject({ category: 'Subscription Revenue', type: 'income', entity_id: ids.media, property_id: null, status: 'posted' })
+    const [m] = await q(`SELECT received_on::text AS d, origin FROM media_receipts WHERE bank_txn_id = $1`, [id])
+    expect(m).toEqual({ d: '2026-09-01', origin: 'sheet' })
+    expect((await ledger()).months[0].gross).toBe(19589.65) // not doubled
+  })
+  it('a Zelle to Seawolf with no spreadsheet row is recorded and expensed as Licensing Fees', async () => {
+    const id = await bankRow(-7140.94, '2026-09-01', 'ZELLE TO SEAWOLF RESEARCH')
+    // The spreadsheet's $10,000 payment nearby isn't tied to the bank yet, so it asks first.
+    expect((await post(id, { kind: 'pay_partner' })).json.error!.code).toBe('check_existing')
+    const r = await post(id, { kind: 'pay_partner', create_new: true })
+    expect(r.json.data.media.linked_existing).toBe(false)
+    expect(r.json.data.balances.owed_to_partner).toBe(0)
+    const [t] = await q(`SELECT t.category FROM bank_txn_legs l JOIN transactions t ON t.id = l.transaction_id WHERE l.bank_txn_id = $1`, [id])
+    expect(t.category).toBe('Licensing Fees')
+  })
+  it('moving the royalty to SL Holdings is kept off the books as an owner distribution', async () => {
+    const id = await bankRow(-2448.71, '2026-09-02', 'ONLINE TRANSFER TO SL HOLDINGS')
+    const r = await post(id, { kind: 'pay_owner' })
+    expect(r.json.data.bank.bank_txn.status).toBe('excluded')
+    expect(r.json.data.bank.bank_txn.exclude_reason).toMatch(/Owner distribution/)
+    expect(r.json.data.media.linked_existing).toBe(true)
+    expect(await q('SELECT 1 FROM bank_txn_legs WHERE bank_txn_id = $1', [id])).toEqual([])
+  })
+  it('asks when a deposit is near unmatched spreadsheet rows but no amount matches', async () => {
+    const id = await bankRow(4673.00, '2026-09-02', 'SUBSTACK')
+    const r = await post(id, { kind: 'substack' })
+    expect(r.status).toBe(409)
+    expect(r.json.error!.code).toBe('check_existing')
+    expect(r.json.error!.details.candidates.map((c: any) => c.amount).sort()).toEqual([344.24, 4673.46])
+    const [bank] = await q('SELECT status FROM bank_txns WHERE id = $1', [id])
+    expect(bank.status).toBe('pending') // nothing was posted
+    const cand = r.json.error!.details.candidates.find((c: any) => c.amount === 4673.46)
+    const linked = await post(id, { kind: 'substack', link_entry_id: cand.id })
+    expect(linked.json.data.media.linked_existing).toBe(true)
+    const [m] = await q('SELECT amount::float8 AS a, note FROM media_receipts WHERE id = $1', [cand.id])
+    expect(m.a).toBe(4673)
+    expect(m.note).toMatch(/was \$4673.46/)
+  })
+  it('new money is added with create_new and lands in the bank month unless told otherwise', async () => {
+    const id = await bankRow(1000, '2026-10-01', 'SUBSTACK')
+    const r = await post(id, { kind: 'substack', create_new: true, period: '2026-09' })
+    expect(r.json.data.media.period).toBe('2026-09')
+    const id2 = await bankRow(500, '2026-11-20', 'SUBSTACK')
+    const r2 = await post(id2, { kind: 'substack' })
+    expect(r2.json.data.media.period).toBe('2026-11')
+  })
+  it('refuses the wrong direction, unknown kinds and already-posted rows', async () => {
+    const id = await bankRow(-50, '2026-10-02', 'SUBSTACK')
+    expect((await post(id, { kind: 'substack' })).status).toBe(400)
+    expect((await post(id, { kind: 'refund' })).status).toBe(400)
+    const done = await q(`SELECT bank_txn_id::text AS id FROM media_payouts WHERE bank_txn_id IS NOT NULL LIMIT 1`)
+    expect((await post(done[0].id, { kind: 'pay_partner' })).json.error!.code).toBe('already_resolved')
+  })
+  it('reverting the bank row undoes the media side too', async () => {
+    const id = await bankRow(-3000, '2026-11-25', 'ZELLE TO SEAWOLF RESEARCH')
+    await post(id, { kind: 'pay_partner', create_new: true })
+    expect((await q('SELECT 1 FROM media_payouts WHERE bank_txn_id = $1', [id])).length).toBe(1)
+    await call(BankRevertRoute.POST, { method: 'POST', params: { id } })
+    expect(await q('SELECT 1 FROM media_payouts WHERE bank_txn_id = $1', [id])).toEqual([])
+    // a linked spreadsheet row is untied, not deleted
+    const [linked] = await q(`SELECT id, bank_txn_id::text AS b FROM media_receipts WHERE origin = 'sheet' AND bank_txn_id IS NOT NULL LIMIT 1`)
+    await call(BankRevertRoute.POST, { method: 'POST', params: { id: linked.b } })
+    const [after] = await q('SELECT bank_txn_id FROM media_receipts WHERE id = $1', [linked.id])
+    expect(after.bank_txn_id).toBeNull()
+  })
+  it('void_media_entry removes an untied entry only', async () => {
+    const [e] = await q(`INSERT INTO media_payouts (product_id, payee, amount, paid_on, origin) VALUES ((SELECT id FROM media_products WHERE slug='tct'), 'owner', 9, '2026-01-01', 'manual') RETURNING id`)
+    expect((await call(MediaVoid.POST, { method: 'POST', params: { kind: 'payout', id: String(e.id) }, body: { reason: 'x' } })).json.error!.code).toBe('needs_confirmation')
+    const ok = await call(MediaVoid.POST, { method: 'POST', params: { kind: 'payout', id: String(e.id) }, body: { confirm: true, reason: 'typo' } })
+    expect(ok.json.data.voided).toBe(true)
+    const [tied] = await q(`SELECT id FROM media_payouts WHERE bank_txn_id IS NOT NULL LIMIT 1`)
+    const no = await call(MediaVoid.POST, { method: 'POST', params: { kind: 'payout', id: String(tied.id) }, body: { confirm: true, reason: 'x' } })
+    expect(no.json.error!.code).toBe('bank_reconciled')
+  })
+  it('the MCP catalogue carries the media tools', async () => {
+    const full = await mcp({ jsonrpc: '2.0', id: 40, method: 'tools/list' })
+    const names = full.json.result.tools.map((t: any) => t.name)
+    expect(names).toEqual(expect.arrayContaining(['get_media_ledger', 'post_media_bank_txn', 'record_media_entries', 'void_media_entry']))
+    const r = await mcp({ jsonrpc: '2.0', id: 41, method: 'tools/call', params: { name: 'get_media_ledger', arguments: { product: 'ree' } } }, keys.read)
+    expect(JSON.parse(r.json.result.content[0].text).product.owner_pct).toBe(100)
   })
 })

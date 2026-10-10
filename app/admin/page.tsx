@@ -47,6 +47,8 @@ async function requireAdmin() {
 }
 
 const ROLES = ['manager', 'partner', 'viewer'] as const
+// Pages granted one by one (page_access). Insiders see all of them anyway.
+const PAGES: [string, string][] = [['media-tct', 'The Coal Trader'], ['media-ree', 'The REE Trader'], ['thomas-car', "Thomas's Car"]]
 const ROLE_NOTE: Record<string, string> = {
   admin: 'Everything',
   manager: 'Every property and company, and the note box',
@@ -62,6 +64,10 @@ async function addUser(formData: FormData) {
   const roleIn = String(formData.get('role') || 'viewer')
   const role = (ROLES as readonly string[]).includes(roleIn) ? roleIn : 'viewer'
   if (!email) return
+  const pages = formData.getAll('pages').map(String).filter((k) => PAGES.some(([key]) => key === k))
+  for (const k of pages) {
+    await sql`INSERT INTO page_access (page_key, email) VALUES (${k}, ${email}) ON CONFLICT (page_key, email) DO NOTHING`
+  }
   await sql`
     INSERT INTO allowed_users (email, name, role)
     VALUES (${email}, ${name}, ${role})
@@ -76,6 +82,14 @@ async function removeUser(formData: FormData) {
   const email = formData.get('email') as string
   if (!email || email === ADMIN_EMAIL) return
   await sql`DELETE FROM allowed_users WHERE email = ${email}`
+  await sql`DELETE FROM page_access WHERE lower(email) = lower(${email})`
+  revalidatePath('/admin')
+}
+
+async function removePage(formData: FormData) {
+  'use server'
+  await requireAdmin()
+  await sql`DELETE FROM page_access WHERE lower(email) = lower(${String(formData.get('email'))}) AND page_key = ${String(formData.get('page'))}`
   revalidatePath('/admin')
 }
 
@@ -89,6 +103,8 @@ export default async function AdminPage() {
   if (email !== ADMIN_EMAIL) redirect('/')
 
   const users = await getUsers()
+  const access = (await sql`SELECT lower(email) AS email, page_key FROM page_access ORDER BY page_key`) as { email: string; page_key: string }[]
+  const pageName = (k: string) => PAGES.find(([key]) => key === k)?.[1] ?? k
   const bot = await getBotData()
 
   const field = 'rounded-md border border-rule bg-surface px-3 py-2 text-[15px] placeholder:text-faint focus:border-brass focus:outline-none'
@@ -110,6 +126,13 @@ export default async function AdminPage() {
             {ROLES.map((r) => <option key={r} value={r}>{r[0].toUpperCase() + r.slice(1)}</option>)}
           </select>
           <button type="submit" className="rounded-md bg-ink px-4 py-2 text-[14px] font-medium text-white hover:bg-ink/90">Add or update</button>
+          <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[14px] text-muted sm:col-span-4">
+            <legend className="sr-only">Pages</legend>
+            <span>Also give access to</span>
+            {PAGES.map(([k, label]) => (
+              <label key={k} className="flex items-center gap-1.5"><input type="checkbox" name="pages" value={k} className="accent-ink" /> {label}</label>
+            ))}
+          </fieldset>
         </form>
         <ul className="mt-4 divide-y divide-rule rounded-lg border border-rule bg-surface">
           {userRows.map((u) => {
@@ -119,6 +142,17 @@ export default async function AdminPage() {
                 <div className="min-w-0">
                   <p className="text-[15px]">{u.name || u.email} <span className="text-[13px] text-muted">{role}</span></p>
                   <p className="truncate text-[13px] text-muted">{u.email}. {ROLE_NOTE[role]}.</p>
+                  {access.some((a) => a.email === u.email.toLowerCase()) && (
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {access.filter((a) => a.email === u.email.toLowerCase()).map((a) => (
+                        <form key={a.page_key} action={removePage} className="flex items-center gap-1 rounded bg-wash px-2 py-0.5 text-[13px]">
+                          <input type="hidden" name="email" value={u.email} /><input type="hidden" name="page" value={a.page_key} />
+                          {pageName(a.page_key)}
+                          <button type="submit" aria-label={`Remove ${pageName(a.page_key)}`} className="text-muted hover:text-late">&times;</button>
+                        </form>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 {u.email !== ADMIN_EMAIL && (
                   <form action={removeUser}>
