@@ -27,6 +27,8 @@ import * as BankPost from '@/app/api/v1/bank/[id]/post/route'
 import * as BankMatch from '@/app/api/v1/bank/[id]/match/route'
 import * as BankExclude from '@/app/api/v1/bank/[id]/exclude/route'
 import * as BankRevert from '@/app/api/v1/bank/[id]/revert/route'
+import * as Scheds from '@/app/api/v1/schedules/route'
+import * as Sched from '@/app/api/v1/schedules/[id]/route'
 import * as Changes from '@/app/api/v1/changes/route'
 import * as Quarter from '@/app/api/v1/properties/[id]/quarters/[period]/route'
 import * as Capital from '@/app/api/v1/properties/[id]/capital/route'
@@ -592,6 +594,69 @@ describe('bank posting', () => {
     expect(names).toEqual(expect.arrayContaining(['post_bank_txn', 'match_bank_txn', 'exclude_bank_txn', 'revert_bank_txn']))
     const viaMcp = await mcp({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'post_bank_txn', arguments: { bank_txn_id: Number(id), legs: [{ property_id: ids.pB, category: 'Utilities' }] } } })
     expect(viaMcp.json.result.isError).toBe(false)
+  })
+})
+
+describe('schedules and late rent', () => {
+  const futureCount = async (sid: number) =>
+    (await q(`SELECT COUNT(*)::int AS n FROM transactions WHERE schedule_id = $1 AND status = 'forecast' AND txn_date >= date_trunc('month', CURRENT_DATE)`, [sid]))[0].n
+  it('lists schedules with next due and overdue counts', async () => {
+    const r = await call(Scheds.GET, { path: `/api/v1/schedules?property_id=${ids.pB}` })
+    const s = r.json.data.find((x: any) => x.id === ids.schedule)
+    expect(s).toMatchObject({ books: 'Belford', category: 'Insurance', amount: 50, status: 'active' })
+  })
+  it('editing a schedule rebuilds only its future forecasts', async () => {
+    const before = await futureCount(ids.schedule)
+    expect(before).toBeGreaterThan(0)
+    const r = await call(Sched.PATCH, { method: 'PATCH', params: { id: String(ids.schedule) }, body: { amount: 55.5, months_csv: '1,4,7,10' } })
+    expect(r.status).toBe(200)
+    expect(r.json.data.schedule.amount).toBe(55.5)
+    const amts = await q(`SELECT DISTINCT amount::float8 AS a, EXTRACT(MONTH FROM txn_date)::int AS m FROM transactions WHERE schedule_id = $1 AND status = 'forecast' AND txn_date >= date_trunc('month', CURRENT_DATE)`, [ids.schedule])
+    expect(amts.every((x: any) => x.a === 55.5 && [1, 4, 7, 10].includes(x.m))).toBe(true)
+    const [log] = await q(`SELECT before, after FROM mutations_log WHERE action = 'schedule.update' AND target_id = $1`, [ids.schedule])
+    expect(log.before.amount).toBe(50)
+  })
+  it('pausing removes future forecasts; resuming restores them', async () => {
+    await call(Sched.PATCH, { method: 'PATCH', params: { id: String(ids.schedule) }, body: { status: 'paused' } })
+    expect(await futureCount(ids.schedule)).toBe(0)
+    await call(Sched.PATCH, { method: 'PATCH', params: { id: String(ids.schedule) }, body: { status: 'active', months_csv: null } })
+    expect(await futureCount(ids.schedule)).toBeGreaterThanOrEqual(11)
+  })
+  it('validates schedule edits', async () => {
+    expect((await call(Sched.PATCH, { method: 'PATCH', params: { id: String(ids.schedule) }, body: { type: 'income' } })).status).toBe(400)
+    expect((await call(Sched.PATCH, { method: 'PATCH', params: { id: String(ids.schedule) }, body: { category: 'Rental Income' } })).status).toBe(400)
+    expect((await call(Sched.PATCH, { method: 'PATCH', params: { id: String(ids.schedule) }, body: { months_csv: '13' } })).status).toBe(400)
+    expect((await call(Sched.PATCH, { method: 'PATCH', params: { id: '99999' }, body: { amount: 1 } })).status).toBe(404)
+  })
+  it('late rent: an unpaid unit rent 7+ days old is flagged with tenant and total; unscheduled renters are listed', async () => {
+    await q(`UPDATE units SET current_tenant = 'Tim Test' WHERE id = $1`, [ids.unitA])
+    const r = await call(Scheds.POST, { method: 'POST', body: { property_id: ids.pA, unit_id: ids.unitA, category: 'Rental Income', amount: 750, day_of_month: 1 } })
+    expect(r.status).toBe(201)
+    expect(r.json.data.forecasts.created).toBeGreaterThanOrEqual(11)
+    // two months unpaid
+    for (const d of [daysAgo(40), daysAgo(10)]) {
+      await q(`INSERT INTO transactions (property_id, unit_id, type, category, amount, txn_date, status, schedule_id, method)
+               VALUES ($1, $2, 'income', 'Rental Income', 750, $3, 'forecast', $4, 'scheduled')`, [ids.pA, ids.unitA, d, r.json.data.schedule.id])
+    }
+    const a = (await call(Attention.GET)).json.data
+    const late = a.late_rent.find((u: any) => u.unit_id === ids.unitA)
+    // the two inserted months plus this month's (generated, due the 1st) when that is 7+ days ago
+    const expected = 1500 + (new Date().getUTCDate() >= 8 ? 750 : 0)
+    expect(late).toMatchObject({ property: '913', tenant: 'Tim Test', total_owed: expected })
+    expect(late.months.length).toBe(expected / 750)
+    expect(late.oldest_days_late).toBe(40)
+    expect(a.summary.late_rent_total).toBeGreaterThanOrEqual(1500)
+    // Belford collects rent (seeded actuals) with no rent schedule → listed
+    expect(a.rent_without_schedule.map((x: any) => x.property)).toContain('Belford')
+  })
+  it('duplicate check ignores different units and rows backed by different bank lines', async () => {
+    const [u2] = await q(`INSERT INTO units (property_id, label) VALUES ($1, 'Unit 2') RETURNING id`, [ids.pA])
+    await q(`INSERT INTO transactions (property_id, unit_id, type, category, amount, txn_date, status) VALUES
+             ($1, $2, 'income', 'Rental Income', 812.34, $4, 'actual'), ($1, $3, 'income', 'Rental Income', 812.34, $4, 'actual')`,
+      [ids.pA, ids.unitA, u2.id, daysAgo(2)])
+    const a = (await call(Attention.GET)).json.data
+    expect(a.possible_duplicates.some((d: any) => d.amount === 812.34)).toBe(false)
+    expect(a.possible_duplicates.some((d: any) => d.amount === 61.1)).toBe(true)
   })
 })
 

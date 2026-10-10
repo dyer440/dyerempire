@@ -1,6 +1,8 @@
 // lib/api/attention.ts
 // The maintenance checklist a daily/weekly bot runs. One call returns
 // everything that needs a human (or a bot write) right now:
+//   late_rent                   rent 7+ days past due, per unit, with tenant and total owed
+//   rent_without_schedule       units collecting rent with no active schedule (so lateness can't be seen)
 //   overdue_forecasts           scheduled items past their date, never confirmed
 //   pending_bank                bank rows imported but not yet posted
 //   rent_gaps                   recent months with no rent at a property that normally collects it
@@ -39,6 +41,53 @@ export async function getAttention() {
     WHERE t.status = 'forecast' AND t.txn_date < CURRENT_DATE
     ORDER BY t.txn_date, t.id
     LIMIT 100
+  `) as Row[])
+
+  // Late rent, per unit. A rent forecast that is 7+ days past due and still not
+  // confirmed means no payment has been matched to it.
+  const lateRent = await section(async () => {
+    const rows = (await sql`
+      SELECT t.id, t.property_id, p.name AS property, t.unit_id, u.label AS unit,
+             COALESCE(u.current_tenant, p.current_tenant) AS tenant,
+             t.amount::float8 AS amount, to_char(t.txn_date, 'YYYY-MM-DD') AS due,
+             (CURRENT_DATE - t.txn_date) AS days_late
+      FROM transactions t
+      JOIN properties p ON p.id = t.property_id
+      LEFT JOIN units u ON u.id = t.unit_id
+      WHERE t.status = 'forecast' AND t.type = 'income' AND t.category ILIKE '%rent%'
+        AND t.txn_date <= CURRENT_DATE - 7
+      ORDER BY p.name, u.label NULLS FIRST, t.txn_date
+    `) as Row[]
+    const byUnit = new Map<string, Row & { months: Row[]; total_owed: number }>()
+    for (const r of rows) {
+      const k = `${r.property_id}:${r.unit_id ?? 0}`
+      const cur = byUnit.get(k) ?? {
+        property_id: r.property_id, property: r.property, unit_id: r.unit_id, unit: r.unit ?? '(whole property)',
+        tenant: r.tenant, months: [], total_owed: 0,
+      }
+      cur.months.push({ forecast_id: r.id, due: r.due, amount: r.amount, days_late: r.days_late })
+      cur.total_owed = Math.round((cur.total_owed + Number(r.amount)) * 100) / 100
+      byUnit.set(k, cur)
+    }
+    return [...byUnit.values()].map((u) => ({ ...u, oldest_days_late: Math.max(...u.months.map((m) => Number(m.days_late))) }))
+  })
+
+  // Units (or whole properties) that collected rent in the last 90 days but have
+  // no active rent schedule: late_rent cannot see them, so they're listed.
+  const unscheduled = await section(async () => (await sql`
+    SELECT DISTINCT p.id AS property_id, p.name AS property, t.unit_id, u.label AS unit,
+           COALESCE(u.current_tenant, p.current_tenant) AS tenant
+    FROM transactions t
+    JOIN properties p ON p.id = t.property_id
+    LEFT JOIN units u ON u.id = t.unit_id
+    WHERE t.status = 'actual' AND t.type = 'income' AND t.category ILIKE '%rent%'
+      AND COALESCE(is_deposit, FALSE) = FALSE AND t.txn_date >= CURRENT_DATE - 90
+      AND NOT EXISTS (
+        SELECT 1 FROM recurring_schedules s
+        WHERE s.property_id = t.property_id AND s.status = 'active' AND s.type = 'income'
+          AND s.category ILIKE '%rent%'
+          AND (s.unit_id IS NULL OR s.unit_id = t.unit_id))
+    ORDER BY p.name
   `) as Row[])
 
   const pendingBank = await section(async () => {
@@ -91,6 +140,7 @@ export async function getAttention() {
       ON b.property_id = a.property_id AND b.id > a.id
      AND b.amount = a.amount AND b.type = a.type
      AND ABS(b.txn_date - a.txn_date) <= 10
+     AND COALESCE(b.unit_id, 0) = COALESCE(a.unit_id, 0)
     JOIN properties p ON p.id = a.property_id
     WHERE a.status = 'actual' AND b.status = 'actual'
       AND a.txn_date >= CURRENT_DATE - 120
@@ -98,6 +148,11 @@ export async function getAttention() {
       AND NOT EXISTS (
         SELECT 1 FROM reviewed_pairs rp
         WHERE rp.txn_id_a = LEAST(a.id, b.id) AND rp.txn_id_b = GREATEST(a.id, b.id)
+      )
+      -- Two rows each backed by a DIFFERENT bank line are both real cash.
+      AND NOT EXISTS (
+        SELECT 1 FROM bank_txn_legs la JOIN bank_txn_legs lb ON lb.transaction_id = b.id
+        WHERE la.transaction_id = a.id AND la.bank_txn_id <> lb.bank_txn_id
       )
     ORDER BY a.txn_date DESC
     LIMIT 50
@@ -144,6 +199,9 @@ export async function getAttention() {
   return {
     as_of: new Date().toISOString().slice(0, 10),
     summary: {
+      late_rent_units: count(lateRent),
+      late_rent_total: Array.isArray(lateRent) ? Math.round(lateRent.reduce((t, u) => t + u.total_owed, 0) * 100) / 100 : 0,
+      rent_without_schedule: count(unscheduled),
       overdue_forecasts: count(overdue),
       pending_bank_rows: pendingCount,
       rent_gaps: count(rentGaps),
@@ -152,6 +210,8 @@ export async function getAttention() {
       unclosed_quarters: count(unclosed),
       schedules_without_forecasts: count(stale),
     },
+    late_rent: lateRent,
+    rent_without_schedule: unscheduled,
     overdue_forecasts: overdue,
     pending_bank: pendingBank,
     rent_gaps: rentGaps,
@@ -160,6 +220,8 @@ export async function getAttention() {
     unclosed_quarters: { period: quarter, properties: unclosed },
     schedules_without_forecasts: stale,
     hints: {
+      late_rent: 'Lead the report with this. Name the unit, tenant, months and total owed. Rent counts as received only once a bank payment is matched or posted to it.',
+      rent_without_schedule: 'These units collect rent but late_rent cannot watch them. Add a rent schedule (create_schedule) with the unit, amount and due day.',
       overdue_forecasts: 'confirm_forecast if it was paid (check the bank), delete_forecast if it will not happen.',
       schedules_without_forecasts: 'regenerate_forecasts for that property_id / entity_id.',
       possible_duplicates: 'A person reviews these in /real-estate/close. Bots should report, not delete.',

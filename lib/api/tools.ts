@@ -10,6 +10,7 @@ import { getAttention } from './attention'
 import { listPendingBank } from './bank'
 import { importBankCsv } from './bank-import'
 import { postBankTxn, matchBankTxn, excludeBankTxn, revertBankTxn } from './bank-post'
+import { listSchedules, updateSchedule, createSchedule } from './schedules'
 import { describeSchema } from './schema'
 import { runReadOnlySql } from './sql-runner'
 import { badRequest } from './errors'
@@ -54,7 +55,7 @@ export const TOOLS: Tool[] = [
     name: 'get_attention',
     title: 'Maintenance checklist',
     description:
-      'Start here for daily/weekly maintenance. Returns overdue scheduled items, pending bank rows, recent months with no rent, ' +
+      'Start here for daily/weekly maintenance. Returns late rent per unit (tenant, months, total owed), units collecting rent without a schedule, overdue scheduled items, pending bank rows, recent months with no rent, ' +
       'possible duplicate entries, tax/insurance due in 60 days, co-owned properties whose last quarter is not closed, and ' +
       'recurring schedules that need forecasts regenerated. Each section includes ids you can act on with the other tools.',
     scope: 'read',
@@ -362,6 +363,66 @@ export const TOOLS: Tool[] = [
     inputSchema: obj({ bank_txn_id: int('Bank row id') }, ['bank_txn_id']),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     run: (a, who) => revertBankTxn(a, who),
+  },
+  {
+    name: 'list_schedules',
+    title: 'List recurring schedules',
+    description: 'Recurring schedules (rent, fees, taxes, insurance, subscriptions) with next due date, last confirmed payment and overdue count.',
+    scope: 'read',
+    inputSchema: obj({
+      property_id: int('Property id'),
+      entity_id: int('Entity id (own books)'),
+      status: { type: 'string', enum: ['active', 'paused', 'all'] },
+    }),
+    annotations: READ,
+    run: (a) => listSchedules(a),
+  },
+  {
+    name: 'update_schedule',
+    title: 'Edit or pause a schedule',
+    description:
+      'Change a recurring schedule (amount, day_of_month, frequency, months_csv, description, category, start_date, ' +
+      'end_date, unit_id) or pause it with status "paused". Its future scheduled rows are rebuilt to match; actuals ' +
+      'and closed periods are never touched.',
+    scope: 'write',
+    inputSchema: obj({
+      id: int('Schedule id'),
+      amount: money('Amount'),
+      day_of_month: { type: 'integer', minimum: 1, maximum: 31 },
+      frequency: { type: 'string', enum: ['monthly', 'quarterly', 'semiannual', 'annual'] },
+      months_csv: { type: ['string', 'null'], description: 'Months it falls in, e.g. "1,4,7,10"; null for the frequency default' },
+      description: { type: ['string', 'null'] },
+      category: str('Same income/expense kind'),
+      status: { type: 'string', enum: ['active', 'paused'] },
+      start_date: { type: ['string', 'null'], pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+      end_date: { type: ['string', 'null'], pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+      unit_id: { type: ['integer', 'null'] },
+    }, ['id']),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    run: (a, who) => updateSchedule(a, who),
+  },
+  {
+    name: 'create_schedule',
+    title: 'Create a recurring schedule',
+    description:
+      'Add a recurring item to a property (optionally a unit) or an entity, e.g. a unit\'s monthly rent so late payments ' +
+      'get flagged. Type comes from the category. Creates the next 12 months of scheduled rows.',
+    scope: 'write',
+    inputSchema: obj({
+      property_id: int('Property'),
+      entity_id: int('Entity'),
+      unit_id: int('Unit'),
+      category: str('Exact category name'),
+      amount: money('Amount'),
+      frequency: { type: 'string', enum: ['monthly', 'quarterly', 'semiannual', 'annual'] },
+      months_csv: str('Optional months, e.g. "3,9"'),
+      day_of_month: { type: 'integer', minimum: 1, maximum: 31 },
+      description: str('Label'),
+      start_date: date('First date it applies'),
+      end_date: date('Last date it applies'),
+    }, ['category', 'amount']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    run: (a, who) => createSchedule(a, who),
   },
   {
     name: 'regenerate_forecasts',

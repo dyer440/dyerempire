@@ -98,6 +98,9 @@ The server accepts the key with or without the `Bearer ` prefix, so either form 
 | `match_bank_txn` | `POST /api/v1/bank/{id}/match` | write |
 | `exclude_bank_txn` | `POST /api/v1/bank/{id}/exclude` | write |
 | `revert_bank_txn` | `POST /api/v1/bank/{id}/revert` | write |
+| `list_schedules` | `GET /api/v1/schedules` | read |
+| `create_schedule` | `POST /api/v1/schedules` | write |
+| `update_schedule` | `PATCH /api/v1/schedules/{id}` | write |
 | `regenerate_forecasts` | `POST /api/v1/forecasts/regenerate` | write |
 | `describe_schema` | `GET /api/v1/schema` | sql |
 | `run_sql` | `POST /api/v1/query` with `{ "sql": "...", "params": [] }` | sql |
