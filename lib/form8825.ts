@@ -28,8 +28,12 @@ export const FORM_8825_LINES: Form8825Line[] = [
   { line: '14', label: 'Other (supplies, misc.)', categories: ['Materials & Supplies', 'Supplies', 'Other Expense', 'Other Misc. Expenses', 'Marketing'] },
 ]
 
-// Categories that must NOT appear in the P&L rollup at all.
-export const NON_PL_CATEGORIES = new Set(['Security Deposit'])
+// Categories that must NOT appear in the tax (8825 / Schedule E) rollup at all.
+//   Security Deposit: a liability, never income or expense.
+//   Loan Principal:   repaying debt is real cash out (so cash views, retained cash
+//                     and distributions still count it) but it is not deductible;
+//                     only the interest leg (Mortgage Interest) reaches the return.
+export const NON_PL_CATEGORIES = new Set(['Security Deposit', 'Loan Principal'])
 
 // Build a category → line label lookup, and surface any category not yet mapped
 // so it can't be silently dropped from the rollup.

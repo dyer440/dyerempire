@@ -69,6 +69,10 @@ async function categoryKinds(): Promise<Map<string, 'income' | 'expense'>> {
     for (const c of INCOME_CATEGORIES) map.set(c, 'income')
     for (const c of EXPENSE_CATEGORIES) map.set(c, 'expense')
   }
+  // System categories the API always accepts, even before the categories table
+  // has a row for them. Loan Principal: cash out, excluded from the tax rollup
+  // (lib/form8825.ts NON_PL_CATEGORIES). Used for the principal leg of loan payments.
+  if (!map.has('Loan Principal')) map.set('Loan Principal', 'expense')
   return map
 }
 

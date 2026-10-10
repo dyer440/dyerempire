@@ -116,7 +116,7 @@ beforeAll(async () => {
   const cats: [string, string][] = [
     ['Rental Income', 'income'], ['Late Fee', 'income'], ['Other Income', 'income'],
     ['Property Taxes', 'expense'], ['Insurance', 'expense'], ['Repairs & Maintenance', 'expense'],
-    ['Utilities', 'expense'], ['Management Fee', 'expense'], ['Payroll', 'expense'], ['Security Deposit', 'expense'],
+    ['Utilities', 'expense'], ['Mortgage Interest', 'expense'], ['Management Fee', 'expense'], ['Payroll', 'expense'], ['Security Deposit', 'expense'],
   ]
   for (const [i, [n, k]] of cats.entries()) await q('INSERT INTO categories (name, kind, sort_order) VALUES ($1,$2,$3)', [n, k, i])
 
@@ -526,6 +526,18 @@ describe('bank posting', () => {
     const r = await post(id, { legs: [{ property_id: ids.pA, category: 'Utilities' }] })
     expect(r.status).toBe(409)
     expect(r.json.error?.code).toBe('period_closed')
+  })
+  it('splits a loan payment into deductible interest and Loan Principal', async () => {
+    const id = await bankRow(-196.25, daysAgo(2), 'LIGHTSTREAM')
+    const r = await post(id, { legs: [
+      { property_id: ids.pB, category: 'Mortgage Interest', amount: 10.19 },
+      { property_id: ids.pB, category: 'Loan Principal', amount: 186.06 },
+    ] })
+    expect(r.status).toBe(200)
+    expect(r.json.data.legs.map((l: any) => l.category).sort()).toEqual(['Loan Principal', 'Mortgage Interest'])
+    const p = await call(Pnl.GET, { path: `/api/v1/pnl?property_id=${ids.pB}&from=${daysAgo(3)}&to=${daysAgo(1)}&group_by=form8825` })
+    const nd = p.json.data.groups.find((g: any) => String(g.line).startsWith('(not deductible'))
+    expect(nd.categories).toContain('Loan Principal')
   })
   it('posts to entity books', async () => {
     const id = await bankRow(-47.7, daysAgo(2), 'ADOBE')

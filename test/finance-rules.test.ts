@@ -84,6 +84,7 @@ describe('Form 8825 mapping', () => {
   })
   it('Security Deposit maps to NO line (it is a liability, not P&L)', () => {
     expect(lineForCategory('Security Deposit')).toBeNull()
+    expect(lineForCategory('Loan Principal')).toBeNull()
   })
   it('Repairs and Cleaning stay on separate lines', () => {
     expect(lineForCategory('Repairs & Maintenance')).not.toBe(lineForCategory('Cleaning & Maintenance'))
