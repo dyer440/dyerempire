@@ -1,6 +1,6 @@
 // lib/api/periods.ts
-// Quarter-end actions for bots, mirroring app/real-estate/distributions and
-// app/real-estate/recurring (closePeriod / reopenPeriod), with tighter rules:
+// Quarter-end actions for bots (the website no longer has its own close screen),
+// with these rules:
 //
 // record_distribution
 //   • $0 can always be recorded (the "nothing paid this quarter" record).

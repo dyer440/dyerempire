@@ -1,5 +1,6 @@
 import { auth, currentUser } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
+import { revalidatePath } from 'next/cache'
 import sql from '@/lib/db'
 import { initDb } from '@/lib/init-db'
 import { ADMIN_EMAIL } from '@/lib/constants'
@@ -45,17 +46,28 @@ async function requireAdmin() {
   if (email !== ADMIN_EMAIL) throw new Error('Not authorized.')
 }
 
+const ROLES = ['manager', 'partner', 'viewer'] as const
+const ROLE_NOTE: Record<string, string> = {
+  admin: 'Everything',
+  manager: 'Every property and company, and the note box',
+  partner: 'Only properties where their email is on the owner record',
+  viewer: 'No real-estate pages; only pages granted separately',
+}
+
 async function addUser(formData: FormData) {
   'use server'
   await requireAdmin()
-  const email = formData.get('email') as string
-  const name = formData.get('name') as string
+  const email = String(formData.get('email') || '').trim().toLowerCase()
+  const name = String(formData.get('name') || '').trim()
+  const roleIn = String(formData.get('role') || 'viewer')
+  const role = (ROLES as readonly string[]).includes(roleIn) ? roleIn : 'viewer'
   if (!email) return
   await sql`
-    INSERT INTO allowed_users (email, name)
-    VALUES (${email}, ${name})
-    ON CONFLICT (email) DO NOTHING
+    INSERT INTO allowed_users (email, name, role)
+    VALUES (${email}, ${name}, ${role})
+    ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role, name = COALESCE(NULLIF(EXCLUDED.name, ''), allowed_users.name)
   `
+  revalidatePath('/admin')
 }
 
 async function removeUser(formData: FormData) {
@@ -64,6 +76,7 @@ async function removeUser(formData: FormData) {
   const email = formData.get('email') as string
   if (!email || email === ADMIN_EMAIL) return
   await sql`DELETE FROM allowed_users WHERE email = ${email}`
+  revalidatePath('/admin')
 }
 
 export default async function AdminPage() {
@@ -78,125 +91,88 @@ export default async function AdminPage() {
   const users = await getUsers()
   const bot = await getBotData()
 
+  const field = 'rounded-md border border-rule bg-surface px-3 py-2 text-[15px] placeholder:text-faint focus:border-brass focus:outline-none'
+  const userRows = users as { email: string; name: string | null; role: string | null }[]
+
   return (
-    <main className="min-h-screen bg-black text-white p-8">
-      <div className="max-w-2xl mx-auto">
-        <div className="flex items-center justify-between mb-10">
-          <h1 className="text-2xl tracking-[0.3em] uppercase" style={{ fontFamily: 'Georgia, serif', fontWeight: 300 }}>
-            Manage Access
-          </h1>
-          <a href="/" className="text-white/40 hover:text-white text-sm tracking-widest uppercase transition-colors">
-            ← Home
-          </a>
-        </div>
+    <main className="max-w-3xl space-y-12">
+      <h1 className="font-serif text-4xl font-medium tracking-tight">Admin</h1>
 
-        {/* Add User Form */}
-        <form action={addUser} className="mb-10 border border-white/10 p-6">
-          <h2 className="text-sm tracking-widest uppercase text-white/50 mb-4">Add User</h2>
-          <div className="flex flex-col gap-3">
-            <input
-              name="name"
-              placeholder="Name"
-              className="bg-white/5 border border-white/20 px-4 py-2 text-white placeholder:text-white/30 focus:outline-none focus:border-white/50 text-sm"
-            />
-            <input
-              name="email"
-              type="email"
-              placeholder="Email address"
-              required
-              className="bg-white/5 border border-white/20 px-4 py-2 text-white placeholder:text-white/30 focus:outline-none focus:border-white/50 text-sm"
-            />
-            <button
-              type="submit"
-              className="border border-white/30 px-6 py-2 text-sm tracking-widest uppercase hover:bg-white/10 transition-all self-start"
-            >
-              Add
-            </button>
-          </div>
+      <section aria-labelledby="users-h">
+        <h2 id="users-h" className="font-serif text-2xl">People</h2>
+        <form action={addUser} className="mt-4 grid gap-3 rounded-lg border border-rule bg-surface p-4 sm:grid-cols-[1fr_1.4fr_auto_auto]">
+          <label className="sr-only" htmlFor="u-name">Name</label>
+          <input id="u-name" name="name" placeholder="Name" className={field} />
+          <label className="sr-only" htmlFor="u-email">Email</label>
+          <input id="u-email" name="email" type="email" placeholder="Email address" required className={field} />
+          <label className="sr-only" htmlFor="u-role">Role</label>
+          <select id="u-role" name="role" defaultValue="partner" className={field}>
+            {ROLES.map((r) => <option key={r} value={r}>{r[0].toUpperCase() + r.slice(1)}</option>)}
+          </select>
+          <button type="submit" className="rounded-md bg-ink px-4 py-2 text-[14px] font-medium text-white hover:bg-ink/90">Add or update</button>
         </form>
-
-        {/* User List */}
-        <div className="border border-white/10">
-          <div className="px-6 py-3 border-b border-white/10 text-xs tracking-widest uppercase text-white/40">
-            Allowed Users ({users.length})
-          </div>
-          {(users as { email: string; name: string }[]).map((u) => (
-            <div key={u.email} className="flex items-center justify-between px-6 py-4 border-b border-white/5 hover:bg-white/5">
-              <div>
-                <div className="text-sm text-white">{u.name || '—'}</div>
-                <div className="text-xs text-white/40 mt-0.5">{u.email}</div>
-              </div>
-              {u.email !== ADMIN_EMAIL && (
-                <form action={removeUser}>
-                  <input type="hidden" name="email" value={u.email} />
-                  <button
-                    type="submit"
-                    className="text-xs text-white/30 hover:text-red-400 tracking-widest uppercase transition-colors"
-                  >
-                    Remove
-                  </button>
-                </form>
-              )}
-              {u.email === ADMIN_EMAIL && (
-                <span className="text-xs text-white/20 tracking-widest uppercase">Admin</span>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {/* Bot API */}
-        <div className="mt-14">
-          <h2 className="text-xl tracking-[0.3em] uppercase mb-6" style={{ fontFamily: 'Georgia, serif', fontWeight: 300 }}>
-            Bot API
-          </h2>
-          {!bot.ready && (
-            <p className="mb-6 text-sm text-amber-300">
-              Run <code>migrations/2026-10_bot_api.sql</code> in Neon to enable bot keys.
-            </p>
-          )}
-          <ApiKeyCreator />
-
-          <div className="border border-white/10 mb-10">
-            <div className="px-6 py-3 border-b border-white/10 text-xs tracking-widest uppercase text-white/40">
-              Keys ({bot.keys.length})
-            </div>
-            {bot.keys.map((k) => (
-              <div key={k.id} className={`flex items-center justify-between px-6 py-4 border-b border-white/5 ${k.revoked_at ? 'opacity-40' : ''}`}>
-                <div>
-                  <div className="text-sm text-white">
-                    {k.name} <span className="text-white/40 font-mono text-xs">{k.key_prefix}…</span>
-                  </div>
-                  <div className="text-xs text-white/40 mt-0.5">
-                    {k.scopes.join(', ')} · created {k.created_at} · last used {k.last_used_at ?? 'never'}
-                    {k.expires_at ? ` · expires ${k.expires_at}` : ''}
-                    {k.revoked_at ? ` · revoked ${k.revoked_at}` : ''}
-                  </div>
+        <ul className="mt-4 divide-y divide-rule rounded-lg border border-rule bg-surface">
+          {userRows.map((u) => {
+            const role = u.email === ADMIN_EMAIL ? 'admin' : u.role || 'viewer'
+            return (
+              <li key={u.email} className="flex items-center justify-between gap-4 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="text-[15px]">{u.name || u.email} <span className="text-[13px] text-muted">{role}</span></p>
+                  <p className="truncate text-[13px] text-muted">{u.email}. {ROLE_NOTE[role]}.</p>
                 </div>
-                {!k.revoked_at && (
-                  <form action={revokeApiKey}>
-                    <input type="hidden" name="id" value={k.id} />
-                    <button type="submit" className="text-xs text-white/30 hover:text-red-400 tracking-widest uppercase transition-colors">
-                      Revoke
-                    </button>
+                {u.email !== ADMIN_EMAIL && (
+                  <form action={removeUser}>
+                    <input type="hidden" name="email" value={u.email} />
+                    <button type="submit" className="text-[14px] text-muted hover:text-late">Remove</button>
                   </form>
                 )}
-              </div>
-            ))}
-          </div>
+              </li>
+            )
+          })}
+        </ul>
+      </section>
 
-          <div className="border border-white/10">
-            <div className="px-6 py-3 border-b border-white/10 text-xs tracking-widest uppercase text-white/40">
-              Recent bot changes
-            </div>
-            {bot.changes.length === 0 && <div className="px-6 py-4 text-sm text-white/30">None yet.</div>}
-            {bot.changes.map((c) => (
-              <div key={c.id} className="px-6 py-2 border-b border-white/5 text-xs text-white/60 font-mono">
-                {c.at} · {c.actor} · {c.action} · {c.target_table}#{c.target_id ?? '–'}
+      <section aria-labelledby="keys-h">
+        <h2 id="keys-h" className="font-serif text-2xl">Bot keys</h2>
+        {!bot.ready && (
+          <p className="mt-2 text-[14px] text-late">Run migrations/2026-10_bot_api.sql in Neon to enable bot keys.</p>
+        )}
+        <div className="mt-4"><ApiKeyCreator /></div>
+        <ul className="mt-4 divide-y divide-rule rounded-lg border border-rule bg-surface">
+          {bot.keys.map((k) => (
+            <li key={k.id} className={`flex items-center justify-between gap-4 px-4 py-3 ${k.revoked_at ? 'opacity-50' : ''}`}>
+              <div className="min-w-0">
+                <p className="text-[15px]">{k.name} <span className="text-[13px] text-muted">{k.key_prefix}</span></p>
+                <p className="text-[13px] text-muted">
+                  Can {k.scopes.join(', ')}. Created {k.created_at}, last used {k.last_used_at ?? 'never'}
+                  {k.expires_at ? `, expires ${k.expires_at}` : ''}{k.revoked_at ? `, revoked ${k.revoked_at}` : ''}.
+                </p>
               </div>
+              {!k.revoked_at && (
+                <form action={revokeApiKey}>
+                  <input type="hidden" name="id" value={k.id} />
+                  <button type="submit" className="text-[14px] text-muted hover:text-late">Revoke</button>
+                </form>
+              )}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section aria-labelledby="changes-h">
+        <h2 id="changes-h" className="font-serif text-2xl">Recent bot changes</h2>
+        {bot.changes.length === 0 ? <p className="mt-3 text-muted">None yet.</p> : (
+          <ul className="mt-4 divide-y divide-rule rounded-lg border border-rule bg-surface text-[14px]">
+            {bot.changes.map((c) => (
+              <li key={c.id} className="grid grid-cols-[8.5rem_5rem_minmax(0,1fr)] gap-3 px-4 py-2">
+                <span className="num text-muted">{c.at}</span>
+                <span className="truncate">{c.actor}</span>
+                <span className="truncate">{c.action} <span className="text-muted">{c.target_table} {c.target_id ?? ''}</span></span>
+              </li>
             ))}
-          </div>
-        </div>
-      </div>
+          </ul>
+        )}
+      </section>
     </main>
   )
 }

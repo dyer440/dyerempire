@@ -7,52 +7,52 @@ import { useActionState, useState } from 'react'
 import { createApiKey, type CreateKeyState } from './api-key-actions'
 
 const input =
-  'bg-white/5 border border-white/20 px-4 py-2 text-white placeholder:text-white/30 focus:outline-none focus:border-white/50 text-sm'
+  'rounded-md border border-rule bg-paper px-3 py-2 text-[15px] placeholder:text-faint focus:border-brass focus:outline-none'
 
 export default function ApiKeyCreator() {
   const [state, action, pending] = useActionState<CreateKeyState, FormData>(createApiKey, { status: 'idle' })
   const [copied, setCopied] = useState(false)
 
   return (
-    <div className="mb-10 border border-white/10 p-6">
-      <h2 className="text-sm tracking-widest uppercase text-white/50 mb-4">New Bot API Key</h2>
+    <div className="rounded-lg border border-rule bg-surface p-4">
+      <h3 className="mb-3 text-[15px] font-medium">New key</h3>
       <form action={action} className="flex flex-col gap-3">
         <input name="name" placeholder="Bot name, e.g. GrokBot" required className={input} />
-        <div className="flex flex-wrap gap-4 text-sm text-white/70">
+        <div className="flex flex-wrap gap-4 text-[14px] text-muted">
           <label className="flex items-center gap-2">
-            <input type="checkbox" name="scopes" value="read" defaultChecked className="accent-blue-400" /> read
+            <input type="checkbox" name="scopes" value="read" defaultChecked className="accent-ink" /> read
           </label>
           <label className="flex items-center gap-2">
-            <input type="checkbox" name="scopes" value="write" className="accent-blue-400" /> write
+            <input type="checkbox" name="scopes" value="write" className="accent-ink" /> write
           </label>
           <label className="flex items-center gap-2">
-            <input type="checkbox" name="scopes" value="sql" className="accent-blue-400" /> sql (read-only queries)
+            <input type="checkbox" name="scopes" value="sql" className="accent-ink" /> sql (read-only queries)
           </label>
         </div>
         <input name="expires_days" type="number" min={1} placeholder="Expires after N days (blank = never)" className={input} />
         <button
           type="submit"
           disabled={pending}
-          className="border border-white/30 px-6 py-2 text-sm tracking-widest uppercase hover:bg-white/10 transition-all self-start disabled:opacity-40"
+          className="self-start rounded-md bg-ink px-4 py-2 text-[14px] font-medium text-white hover:bg-ink/90 disabled:opacity-50"
         >
-          {pending ? 'Creating…' : 'Create key'}
+          {pending ? 'Creating' : 'Create key'}
         </button>
       </form>
 
-      {state.status === 'error' && <p className="mt-4 text-sm text-red-400">{state.message}</p>}
+      {state.status === 'error' && <p className="mt-4 text-[14px] text-late">{state.message}</p>}
 
       {state.status === 'created' && (
-        <div className="mt-5 border border-amber-400/40 bg-amber-400/5 p-4">
-          <p className="text-xs tracking-widest uppercase text-amber-300 mb-2">
+        <div className="mt-4 rounded-md border border-due/40 bg-due-wash/50 p-4">
+          <p className="mb-2 text-[14px] text-due">
             Key for {state.name} ({state.scopes.join(', ')}). Copy it now; it will not be shown again.
           </p>
-          <code className="block break-all text-sm text-white bg-black/60 p-3 select-all">{state.key}</code>
+          <code className="block select-all break-all rounded bg-surface p-3 text-[14px] text-ink">{state.key}</code>
           <button
             type="button"
             onClick={() => {
               navigator.clipboard?.writeText(state.key).then(() => setCopied(true), () => setCopied(false))
             }}
-            className="mt-3 text-xs tracking-widest uppercase text-white/60 hover:text-white"
+            className="mt-3 text-[14px] text-muted hover:text-ink"
           >
             {copied ? 'Copied' : 'Copy to clipboard'}
           </button>

@@ -1,6 +1,6 @@
 // lib/api/bank-import.ts
 // Bot upload of a US Bank CSV export into the import queue (bank_txns), using
-// exactly the same parser and dedup hash as the /real-estate/import screen.
+// exactly the same parser and dedup hash the retired import screen used.
 // Re-sending an overlapping export is harmless: rows already imported are
 // skipped by the unique import_hash. Nothing is posted to the ledger here; the
 // rows land as 'pending' for the Import screen (or a later bot step) to post.

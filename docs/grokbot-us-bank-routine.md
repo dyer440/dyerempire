@@ -65,6 +65,7 @@ Units with no rent schedule (can't be checked): <from rent_without_schedule, or 
 
 File: <from> to <to>, <rows_in_file> rows. New: <inserted>. Already had: <already_imported>.
 Bank rows waiting to be posted: <pending_in_queue>
+Notes from Betsy or David waiting: <summary.open_notes>
 
 Also:
 - Overdue scheduled items: <count>, oldest <date>

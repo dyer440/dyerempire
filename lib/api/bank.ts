@@ -1,6 +1,6 @@
 // lib/api/bank.ts
 // Read-only view of the bank import queue, with the same rule suggestion and
-// match candidates the /real-estate/import screen shows. Posting is in
+// match candidates for each pending row. Posting is in
 // lib/api/bank-post.ts.
 import sql from '@/lib/db'
 import { bestRule, ruleToSuggestion, type ImportRule } from '@/lib/import-rules'

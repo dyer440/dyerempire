@@ -93,6 +93,9 @@ The server accepts the key with or without the `Bearer ` prefix, so either form 
 | `update_transaction` | `PATCH /api/v1/transactions/{id}` | write |
 | `confirm_forecast` | `POST /api/v1/transactions/{id}/confirm` | write |
 | `delete_forecast` | `DELETE /api/v1/transactions/{id}` | write |
+| `void_transaction` | `POST /api/v1/transactions/{id}/void` | write |
+| `list_notes` | `GET /api/v1/notes?status=open` | read |
+| `resolve_note` | `POST /api/v1/notes/{id}/resolve` | write |
 | `import_bank_csv` | `POST /api/v1/bank/import` | write |
 | `post_bank_txn` | `POST /api/v1/bank/{id}/post` | write |
 | `match_bank_txn` | `POST /api/v1/bank/{id}/match` | write |
@@ -129,19 +132,23 @@ Responses are `{ "ok": true, "data": ... }` or `{ "ok": false, "error": { "code"
 
 ## Rules bots live under
 
-These match what Betsy can do in the UI, plus a few guards that matter more for automation.
+Since October 2026 the website is read-only, so these tools are the only way the books change. The guards below are what keep that safe.
 
 - **Closed periods are locked.** Writes into a closed range return `409 period_closed`.
 - **Categories must exist.** Type (income or expense) comes from the category. An unknown name returns the valid list.
 - **Deposits** are sent as `is_deposit: true` with `type`, and are excluded from every P&L figure.
 - **No double-booking.** An identical actual returns `409 duplicate`. A payment that matches a scheduled item returns `409 forecast_exists` and names the forecast to confirm instead. Send `allow_duplicate: true` only when the second row is real.
 - **Retries are safe.** Send an `Idempotency-Key` header (REST) or `idempotency_key` (MCP). The same key never writes twice.
-- **Bank-reconciled rows** keep their amount and date. Revert the match in Import first.
-- **Bots delete scheduled items only.** Actual transactions are deleted in the app.
+- **Bank-reconciled rows** keep their amount and date. Revert the bank row (`revert_bank_txn`) first.
+- **Removing rows.** `delete_forecast` for scheduled items. `void_transaction` for a booked row that should not exist: needs `confirm: true` and a reason, and is refused in a closed quarter or when a bank line is attached (use `revert_bank_txn`).
 - **Distributions:** $0 records freely. A positive payout needs `confirm_payout: true` (the owner stated the exact amount) and must pass the lifetime over-distribution guard (`allow_over` to knowingly return capital).
 - **Closing a quarter** keeps unpaid rent as the arrears record and removes other leftover scheduled items. Record the distribution first.
-- **Bank rows** post with the Import screen's rules: pending only, legs add up to the cent, direction from the bank sign, category must match that direction. Each post, match, exclude and revert is one database transaction.
+- **Bank rows** post with the same rules the old Import screen had: pending only, legs add up to the cent, direction from the bank sign, category must match that direction. Each post, match, exclude and revert is one database transaction.
 - **Every write is logged** in `mutations_log` in the same SQL statement as the write, with before and after JSON. `/admin` shows the latest 25.
+
+## Notes from the website
+
+The site has one input, a note box for David and Betsy ("Billy paid $155 cash for 500 West, August"). Notes never touch the ledger. `get_attention` lists open ones first as `open_notes`. For each one, post what it describes with the normal tools, checking the bank first so nothing is entered twice, then call `resolve_note` with `status: done` and a one-line reply naming amounts and transaction ids. Use `dismissed` when nothing needs posting. Ask David about anything ambiguous instead of guessing. The reply shows under the note on the site.
 
 ## Error codes
 

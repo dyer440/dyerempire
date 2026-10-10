@@ -1,5 +1,5 @@
 // lib/api/bank-post.ts
-// Bot posting of bank rows: the same four outcomes as /real-estate/import, with
+// Bot posting of bank rows: the same four outcomes the retired import screen had, with
 // the same rules, but each one atomic and logged.
 //
 //   post   bank row → new ledger row(s) on property/entity books (1..N legs)
@@ -8,7 +8,7 @@
 //   exclude bank row → not business (personal, transfer between own accounts)
 //   revert  any of the above back to pending (the undo)
 //
-// Rules carried over from app/real-estate/import/actions.ts:
+// Rules carried over from the retired import screen:
 //   • the bank row must be pending; legs must sum to the bank amount to the cent
 //   • direction comes from the bank sign (credit = income, debit = expense)
 //   • closed periods are refused; units must belong to the property

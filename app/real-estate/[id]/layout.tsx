@@ -1,32 +1,42 @@
-// app/real-estate/[id]/layout.tsx  (NEW — wraps all property-scoped pages with the nav)
-import type { ReactNode } from 'react'
-import { auth } from '@clerk/nextjs/server'
+// app/real-estate/[id]/layout.tsx
+// Property header (name, address, who owns it) and the three sections.
+import { requireProperty } from '@/lib/viewer'
 import sql from '@/lib/db'
-import { getUserRole, canAccessProperty, canEdit } from '@/lib/access'
-import PropertyNav from './PropertyNav'
+import Tabs from '../_ui/Tabs'
 
 export default async function PropertyLayout({
   children, params,
 }: {
-  children: ReactNode; params: Promise<{ id: string }>
+  children: React.ReactNode; params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  const propertyId = Number(id)
-
-  const { sessionClaims } = await auth()
-  const email = (sessionClaims?.email as string) || ''
-  const role = await getUserRole(email)
-
-  // No access → render the page alone; it will handle the redirect itself.
-  if (!(await canAccessProperty(email, role, propertyId))) return <>{children}</>
-
-  const prop = (await sql`SELECT name FROM properties WHERE id = ${propertyId} LIMIT 1`) as { name: string }[]
-  const name = prop[0]?.name || ''
+  const { property: p } = await requireProperty(Number(id))
+  const owners = (await sql`
+    SELECT o.name, po.ownership_pct::float8 AS pct FROM property_owners po
+    JOIN owners o ON o.id = po.owner_id
+    WHERE po.property_id = ${p.id} ORDER BY po.ownership_pct DESC, o.name
+  `) as { name: string; pct: number }[]
+  const base = `/real-estate/${p.id}`
 
   return (
-    <div className="re-light">
-      <PropertyNav propertyId={propertyId} name={name} canEdit={canEdit(role)} />
-      {children}
-    </div>
+    <main>
+      <header className="mb-6">
+        <h1 className="font-serif text-4xl font-medium tracking-tight">{p.name}</h1>
+        <p className="mt-1 text-[15px] text-muted">
+          {p.address}, {p.city}, {p.state} {p.zip}. Held by {p.holding_entity}
+          {owners.length > 0 && <>, owned by {owners.map((o) => `${o.name} ${fmtPct(o.pct)}`).join(' and ')}</>}.
+        </p>
+      </header>
+      <Tabs tabs={[
+        { href: base, label: 'Overview' },
+        { href: `${base}/partners`, label: 'Partners' },
+        { href: `${base}/activity`, label: 'Activity' },
+      ]} />
+      <div className="pt-8">{children}</div>
+    </main>
   )
+}
+
+function fmtPct(n: number) {
+  return `${Number.isInteger(n) ? n : n.toFixed(2).replace(/0+$/, '')}%`
 }

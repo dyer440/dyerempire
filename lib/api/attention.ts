@@ -1,6 +1,7 @@
 // lib/api/attention.ts
 // The maintenance checklist a daily/weekly bot runs. One call returns
 // everything that needs a human (or a bot write) right now:
+//   open_notes                  notes typed into the site's note box, not yet handled
 //   late_rent                   rent 7+ days past due, per unit, with tenant and total owed
 //   rent_without_schedule       units collecting rent with no active schedule (so lateness can't be seen)
 //   overdue_forecasts           scheduled items past their date, never confirmed
@@ -12,6 +13,7 @@
 //   schedules_without_forecasts active schedules with nothing in the future (needs regenerate)
 // Each section degrades to an error note rather than failing the whole call.
 import sql from '@/lib/db'
+import { listNotes } from '@/lib/notes'
 
 // SQL rows are dynamic by nature; columns are typed at the point of use.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -193,12 +195,19 @@ export async function getAttention() {
     ORDER BY books, s.category
   `) as Row[])
 
+  // Notes typed into the site's note box that no bot has handled yet.
+  const openNotes = await section(async () =>
+    (await listNotes({ status: 'open', limit: 50 })).map((n) => ({
+      id: n.id, created_at: n.created_at, author: n.author_name || n.author_email, property: n.property, body: n.body,
+    })))
+
   const pendingCount =
     pendingBank && typeof pendingBank === 'object' && 'count' in pendingBank ? Number(pendingBank.count) : 0
 
   return {
     as_of: new Date().toISOString().slice(0, 10),
     summary: {
+      open_notes: count(openNotes),
       late_rent_units: count(lateRent),
       late_rent_total: Array.isArray(lateRent) ? Math.round(lateRent.reduce((t, u) => t + u.total_owed, 0) * 100) / 100 : 0,
       rent_without_schedule: count(unscheduled),
@@ -210,6 +219,7 @@ export async function getAttention() {
       unclosed_quarters: count(unclosed),
       schedules_without_forecasts: count(stale),
     },
+    open_notes: openNotes,
     late_rent: lateRent,
     rent_without_schedule: unscheduled,
     overdue_forecasts: overdue,
@@ -224,7 +234,8 @@ export async function getAttention() {
       rent_without_schedule: 'These units collect rent but late_rent cannot watch them. Add a rent schedule (create_schedule) with the unit, amount and due day.',
       overdue_forecasts: 'confirm_forecast if it was paid (check the bank), delete_forecast if it will not happen.',
       schedules_without_forecasts: 'regenerate_forecasts for that property_id / entity_id.',
-      possible_duplicates: 'A person reviews these in /real-estate/close. Bots should report, not delete.',
+      possible_duplicates: 'Report these to David. Bots should report, not delete.',
+      open_notes: 'Notes from the website note box. Post what each describes with the normal tools, matching the bank first, then resolve_note with a one-line reply. Ask David about anything ambiguous.',
       rent_gaps: 'Property-level only. Multi-unit properties (Southside) can show a month as paid while one unit is short.',
     },
   }

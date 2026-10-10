@@ -13,6 +13,8 @@ import { postBankTxn, matchBankTxn, excludeBankTxn, revertBankTxn } from './bank
 import { listSchedules, updateSchedule, createSchedule } from './schedules'
 import { recordDistribution, closePeriod, reopenPeriod } from './periods'
 import { describeSchema } from './schema'
+import { listBookNotes, resolveBookNote } from './notes'
+import { voidTransaction } from './void'
 import { runReadOnlySql } from './sql-runner'
 import { badRequest } from './errors'
 import type { Input } from './validate'
@@ -56,7 +58,7 @@ export const TOOLS: Tool[] = [
     name: 'get_attention',
     title: 'Maintenance checklist',
     description:
-      'Start here for daily/weekly maintenance. Returns late rent per unit (tenant, months, total owed), units collecting rent without a schedule, overdue scheduled items, pending bank rows, recent months with no rent, ' +
+      'Start here for daily/weekly maintenance. Returns open notes from the website note box, late rent per unit (tenant, months, total owed), units collecting rent without a schedule, overdue scheduled items, pending bank rows, recent months with no rent, ' +
       'possible duplicate entries, tax/insurance due in 60 days, co-owned properties whose last quarter is not closed, and ' +
       'recurring schedules that need forecasts regenerated. Each section includes ids you can act on with the other tools.',
     scope: 'read',
@@ -278,11 +280,27 @@ export const TOOLS: Tool[] = [
   {
     name: 'delete_forecast',
     title: 'Delete a scheduled item',
-    description: 'Delete a scheduled (forecast) row that will not happen. Actual transactions cannot be deleted by bots.',
+    description: 'Delete a scheduled (forecast) row that will not happen. For a booked (actual) row use void_transaction.',
     scope: 'write',
     inputSchema: obj({ id: int('Forecast transaction id') }, ['id']),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     run: (a, who) => svc.deleteForecast(needId(a), who),
+  },
+  {
+    name: 'void_transaction',
+    title: 'Void a booked transaction',
+    description:
+      'Remove an ACTUAL transaction that should not exist (a typo or a double entry). Needs confirm: true after David agrees, ' +
+      'and a reason, which is logged with the full row. Refused inside a closed quarter and when a bank line is attached ' +
+      '(use revert_bank_txn on that bank row instead). Prefer update_transaction when the row is real but wrong.',
+    scope: 'write',
+    inputSchema: obj({
+      id: int('Transaction id'),
+      confirm: { type: 'boolean', description: 'Must be true' },
+      reason: str('Why it is being removed, e.g. "Duplicate of txn 2231"'),
+    }, ['id', 'confirm', 'reason']),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    run: (a, who) => voidTransaction(a, who),
   },
   {
     name: 'import_bank_csv',
@@ -474,6 +492,36 @@ export const TOOLS: Tool[] = [
     inputSchema: obj({ property_id: int('Property id'), entity_id: int('Entity id') }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     run: (a, who) => svc.regenerateForecasts(a, who),
+  },
+  {
+    name: 'list_notes',
+    title: 'Notes left on the site',
+    description:
+      'Notes Betsy or David typed into the website note box, e.g. "Billy paid $155 cash for 500 West, August". ' +
+      'Open notes are work to do: post what each describes with the normal tools (match the bank first so nothing is entered twice), ' +
+      'then resolve_note. Never post a note that is ambiguous; ask David instead.',
+    scope: 'read',
+    inputSchema: obj({
+      status: { type: 'string', enum: ['open', 'done', 'dismissed', 'all'], description: "Default 'open'" },
+      limit: { type: 'integer', minimum: 1, maximum: 500 },
+    }),
+    annotations: READ,
+    run: (a) => listBookNotes(a),
+  },
+  {
+    name: 'resolve_note',
+    title: 'Resolve a note',
+    description:
+      "Mark a site note handled. status 'done' when you posted or fixed what it describes, 'dismissed' when nothing needs posting. " +
+      'reply is shown to the author on the Notes page: say what you did in a sentence, with amounts and transaction ids.',
+    scope: 'write',
+    inputSchema: obj({
+      id: int('Note id'),
+      status: { type: 'string', enum: ['done', 'dismissed'] },
+      reply: str('One or two sentences for the author'),
+    }, ['id', 'status', 'reply']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    run: (a, who) => resolveBookNote(a, who),
   },
 ]
 

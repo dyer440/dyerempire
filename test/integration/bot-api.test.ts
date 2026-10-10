@@ -38,6 +38,10 @@ import * as Capital from '@/app/api/v1/properties/[id]/capital/route'
 import * as Schema from '@/app/api/v1/schema/route'
 import * as Query from '@/app/api/v1/query/route'
 import * as Mcp from '@/app/api/mcp/route'
+import * as Notes from '@/app/api/v1/notes/route'
+import * as NoteResolve from '@/app/api/v1/notes/[id]/resolve/route'
+import * as Void from '@/app/api/v1/transactions/[id]/void/route'
+import { addNote } from '@/lib/notes'
 
 const OWNER_URL = process.env.DATABASE_URL!
 const RO_URL = process.env.PG_TEST_RO_URL ?? 'postgres://dyer_bot_ro:ro@localhost:54329/neondb'
@@ -868,5 +872,73 @@ describe('MCP', () => {
     const res = await Mcp.POST(new Request(BASE + '/api/mcp', { method: 'POST', headers: { authorization: `Bearer ${keys.full}` }, body: '{nope' }))
     expect(res.status).toBe(400)
     expect((await Mcp.GET()).status).toBe(405)
+  })
+})
+
+describe('site notes', () => {
+  let noteId = 0
+  it('a note from the website shows up first in get_attention and in list_notes', async () => {
+    noteId = await addNote({ body: 'Billy paid $155 cash for 913, August', propertyId: ids.pA, email: 'betsy@example.com', name: 'Betsy' })
+    const att = await call(Attention.GET)
+    expect(att.json.data.summary.open_notes).toBe(1)
+    expect(att.json.data.open_notes[0]).toMatchObject({ id: noteId, author: 'Betsy', property: '913' })
+    const viaMcp = await mcp({ jsonrpc: '2.0', id: 20, method: 'tools/call', params: { name: 'list_notes', arguments: {} } }, keys.read)
+    const listed = JSON.parse(viaMcp.json.result.content[0].text)
+    expect(listed.count).toBe(1)
+    expect(listed.notes[0].body).toMatch(/Billy paid/)
+  })
+  it('resolving needs write scope, a status and a reply', async () => {
+    expect((await call(NoteResolve.POST, { method: 'POST', key: keys.read, params: { id: String(noteId) }, body: { status: 'done', reply: 'x' } })).status).toBe(403)
+    const noReply = await call(NoteResolve.POST, { method: 'POST', params: { id: String(noteId) }, body: { status: 'done' } })
+    expect(noReply.status).toBe(400)
+    const badStatus = await call(NoteResolve.POST, { method: 'POST', params: { id: String(noteId) }, body: { status: 'open', reply: 'x' } })
+    expect(badStatus.status).toBe(400)
+  })
+  it('resolve_note marks it done once, logs it, and the reply is kept', async () => {
+    const r = await mcp({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: { name: 'resolve_note', arguments: { id: noteId, status: 'done', reply: 'Posted $155 to 913 August rent (txn 99).' } } })
+    expect(r.json.result.isError).toBe(false)
+    const again = await call(NoteResolve.POST, { method: 'POST', params: { id: String(noteId) }, body: { status: 'dismissed', reply: 'x' } })
+    expect(again.status).toBe(409)
+    expect(again.json.error!.code).toBe('already_resolved')
+    const missing = await call(NoteResolve.POST, { method: 'POST', params: { id: '99999' }, body: { status: 'done', reply: 'x' } })
+    expect(missing.status).toBe(404)
+    const [row] = await q('SELECT status, reply, resolved_by FROM book_notes WHERE id = $1', [noteId])
+    expect(row).toMatchObject({ status: 'done', reply: 'Posted $155 to 913 August rent (txn 99).', resolved_by: 'bot:TestBot' })
+    const [log] = await q(`SELECT action, source FROM mutations_log WHERE target_table = 'book_notes' AND target_id = $1`, [noteId])
+    expect(log).toEqual({ action: 'note.resolve', source: 'mcp' })
+    const open = await call(Notes.GET, { path: '/api/v1/notes?status=open' })
+    expect(open.json.data.count).toBe(0)
+    const all = await call(Notes.GET, { path: '/api/v1/notes?status=all' })
+    expect(all.json.data.notes[0].status).toBe('done')
+    expect((await call(Attention.GET)).json.data.summary.open_notes).toBe(0)
+  })
+})
+
+describe('void_transaction', () => {
+  it('removes an actual only with confirm and a reason, and logs the full row', async () => {
+    const [t] = await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status, description)
+                         VALUES ($1, 'expense', 'Utilities', 19.99, $2, 'actual', 'typo row') RETURNING id`, [ids.pB, daysAgo(2)])
+    const noConfirm = await call(Void.POST, { method: 'POST', params: { id: String(t.id) }, body: { reason: 'typo' } })
+    expect(noConfirm.json.error!.code).toBe('needs_confirmation')
+    const noReason = await call(Void.POST, { method: 'POST', params: { id: String(t.id) }, body: { confirm: true } })
+    expect(noReason.status).toBe(400)
+    expect((await call(Void.POST, { method: 'POST', key: keys.read, params: { id: String(t.id) }, body: { confirm: true, reason: 'x' } })).status).toBe(403)
+    const r = await mcp({ jsonrpc: '2.0', id: 30, method: 'tools/call', params: { name: 'void_transaction', arguments: { id: t.id, confirm: true, reason: 'Typo, entered twice' } } })
+    expect(r.json.result.isError).toBe(false)
+    expect(await q('SELECT 1 FROM transactions WHERE id = $1', [t.id])).toEqual([])
+    const [log] = await q(`SELECT action, note, before->>'description' AS d FROM mutations_log WHERE target_table = 'transactions' AND target_id = $1`, [t.id])
+    expect(log).toEqual({ action: 'transaction.void', note: 'Typo, entered twice', d: 'typo row' })
+  })
+  it('refuses forecasts, bank-linked rows and closed quarters', async () => {
+    const [f] = await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status)
+                         VALUES ($1, 'expense', 'Insurance', 10, CURRENT_DATE + 40, 'forecast') RETURNING id`, [ids.pB])
+    const fc = await call(Void.POST, { method: 'POST', params: { id: String(f.id) }, body: { confirm: true, reason: 'x' } })
+    expect(fc.json.error!.code).toBe('not_actual')
+    const bank = await call(Void.POST, { method: 'POST', params: { id: String(ids.bankLinked) }, body: { confirm: true, reason: 'x' } })
+    expect(bank.json.error!.code).toBe('bank_reconciled')
+    const [closed] = await q(`SELECT id FROM transactions WHERE property_id = $1 AND txn_date = '2026-03-10'`, [ids.pA])
+    const cl = await call(Void.POST, { method: 'POST', params: { id: String(closed.id) }, body: { confirm: true, reason: 'x' } })
+    expect(cl.json.error!.code).toBe('period_closed')
+    expect((await call(Void.POST, { method: 'POST', params: { id: '999999' }, body: { confirm: true, reason: 'x' } })).status).toBe(404)
   })
 })

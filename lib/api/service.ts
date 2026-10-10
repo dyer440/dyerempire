@@ -17,7 +17,7 @@
 //     closes are routine; a positive payout needs the owner's explicit confirmation.
 //
 // ENTITY SCOPE: entity_id means that entity's OWN books (property_id IS NULL),
-// matching /real-estate/entity/[slug] and /real-estate/slcm.
+// matching the company pages at /real-estate/companies/[slug].
 import sql from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { INCOME_CATEGORIES, EXPENSE_CATEGORIES } from '@/lib/categories'
