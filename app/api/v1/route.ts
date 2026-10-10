@@ -19,6 +19,7 @@ const ENDPOINTS = [
   ['PATCH', '/api/v1/transactions/{id}', 'write', 'Edit category/amount/date/description/rental_period/unit_id'],
   ['POST', '/api/v1/transactions/{id}/confirm', 'write', 'Confirm a scheduled item as actual'],
   ['DELETE', '/api/v1/transactions/{id}', 'write', 'Delete a scheduled item (forecasts only)'],
+  ['POST', '/api/v1/bank/import', 'write', 'Upload a US Bank CSV into the import queue (JSON {account_id, csv} or text/csv)'],
   ['POST', '/api/v1/forecasts/regenerate', 'write', 'Rebuild forecasts for property_id or entity_id'],
   ['GET', '/api/v1/schema', 'sql', 'Tables, columns and accounting conventions'],
   ['POST', '/api/v1/query', 'sql', 'Read-only SQL: { sql, params?, max_rows? }'],

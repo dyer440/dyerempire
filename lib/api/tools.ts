@@ -8,6 +8,7 @@ import * as svc from './service'
 import { getPnl } from './reports'
 import { getAttention } from './attention'
 import { listPendingBank } from './bank'
+import { importBankCsv } from './bank-import'
 import { describeSchema } from './schema'
 import { runReadOnlySql } from './sql-runner'
 import { badRequest } from './errors'
@@ -279,6 +280,21 @@ export const TOOLS: Tool[] = [
     inputSchema: obj({ id: int('Forecast transaction id') }, ['id']),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     run: (a, who) => svc.deleteForecast(needId(a), who),
+  },
+  {
+    name: 'import_bank_csv',
+    title: 'Import a bank CSV',
+    description:
+      'Load a US Bank CSV export (columns Date, Transaction, Name, Memo, Amount) into the bank import queue. Pass the ' +
+      'whole file text as csv. Rows already imported are skipped, so overlapping date ranges are safe. Nothing is ' +
+      'booked to the ledger; rows wait as pending. account_id defaults to 1 (US Bank Checking 7848).',
+    scope: 'write',
+    inputSchema: obj({
+      csv: str('Full CSV text including the header row'),
+      account_id: int('bank_accounts.id, default 1'),
+    }, ['csv']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: (a, who) => importBankCsv(a, who),
   },
   {
     name: 'regenerate_forecasts',

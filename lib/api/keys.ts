@@ -36,16 +36,22 @@ export function isScope(s: string): s is Scope {
 }
 
 /**
- * Accepts `Authorization: Bearer de_...`, a bare `Authorization: de_...` (some
- * MCP clients, e.g. xAI's remote-MCP `authorization` field, may send the token
- * without the scheme), or `X-API-Key: de_...`.
+ * Clients differ in which header they let you set, so the key is accepted from
+ * any of these, with or without a "Bearer " prefix on the value:
+ *   Authorization, X-API-Key, apikey, api-key
+ * (Claude's custom-connector UI reserves Authorization for OAuth, so it uses one
+ * of the others; xAI's remote-MCP `authorization` field may omit "Bearer ".)
  */
+const KEY_HEADERS = ['authorization', 'x-api-key', 'apikey', 'api-key'] as const
+
 export function extractKey(req: Request): string | null {
-  const auth = (req.headers.get('authorization') || '').trim()
-  const m = /^Bearer\s+(\S+)$/i.exec(auth)
-  const key = m ? m[1] : auth.startsWith(KEY_PREFIX) ? auth : req.headers.get('x-api-key')?.trim() || null
-  if (!key || !key.startsWith(KEY_PREFIX) || key.length < 20 || key.length > 200) return null
-  return key
+  for (const h of KEY_HEADERS) {
+    const raw = (req.headers.get(h) || '').trim()
+    if (!raw) continue
+    const key = raw.replace(/^Bearer\s+/i, '').trim()
+    if (key.startsWith(KEY_PREFIX) && key.length >= 20 && key.length <= 200 && !/\s/.test(key)) return key
+  }
+  return null
 }
 
 export async function authenticate(req: Request): Promise<BotPrincipal | null> {
