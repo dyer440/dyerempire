@@ -4,11 +4,13 @@
 import { UserButton } from '@clerk/nextjs'
 import { auth } from '@clerk/nextjs/server'
 
+// The media titles live inside SL Media for now. If they get their own pages
+// (TCT, FuseTrader, ...), point these links there.
+const SL_MEDIA = '/real-estate/companies/sl-media'
 const NAV_ITEMS = [
   { label: 'Real Estate', href: '/real-estate' },
-  { label: 'The Coal Trader', href: '#' },
-  { label: 'Rare Earths Intel', href: '#' },
-  { label: 'Fusetrader', href: '#' },
+  { label: 'The Coal Trader', href: SL_MEDIA },
+  { label: 'FuseTrader', href: SL_MEDIA },
   { label: "Thomas's Car", href: '/thomas-car' },
 ]
 

@@ -22,7 +22,7 @@ export default async function SiteFrame({ children }: { children: React.ReactNod
     <div className="site min-h-screen bg-paper text-ink">
       <header className="border-b border-rule bg-surface">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:flex-nowrap sm:px-6">
-          <Link href="/real-estate" className="shrink-0 font-serif text-xl tracking-tight text-ink">
+          <Link href="/" className="shrink-0 font-serif text-xl tracking-tight text-ink">
             Dyer Empire
           </Link>
           <div className="order-last -mx-3 w-[calc(100%+1.5rem)] min-w-0 sm:order-none sm:mx-0 sm:w-auto sm:flex-1">
