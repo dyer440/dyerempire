@@ -202,7 +202,7 @@ export async function getAttention() {
       id: n.id, created_at: n.created_at, author: n.author_name || n.author_email, property: n.property, body: n.body,
     })))
 
-  // Leases that end within 60 days or have already run past their end date.
+  // Leases that end within 45 days (lib/leases.ts EXPIRING_DAYS) or have already run past their end date.
   const leases = await section(async () =>
     (await listLeases()).filter((l) => l.state === 'ending_soon' || l.state === 'month_to_month').map((l) => ({
       lease_id: l.id, property: l.property, unit: l.unit, tenant: l.tenant, end_date: l.end_date, days_left: l.days_left,
@@ -244,7 +244,7 @@ export async function getAttention() {
       rent_without_schedule: 'These units collect rent but late_rent cannot watch them. Add a rent schedule (create_schedule) with the unit, amount and due day.',
       overdue_forecasts: 'confirm_forecast if it was paid (check the bank), delete_forecast if it will not happen.',
       schedules_without_forecasts: 'regenerate_forecasts for that property_id / entity_id.',
-      leases_ending_or_month_to_month: 'Mention leases ending within 60 days and the plan for each. Month-to-month ones are fine if intended.',
+      leases_ending_or_month_to_month: 'Leases ending within 45 days: David needs to negotiate a renewal or plan the exit. Name each with its end date and plan. Month-to-month ones are fine if intended.',
       possible_duplicates: 'Report these to David. Bots should report, not delete.',
       open_notes: 'Notes from the website note box. Post what each describes with the normal tools, matching the bank first, then resolve_note with a one-line reply. Ask David about anything ambiguous.',
       rent_gaps: 'Property-level only. Multi-unit properties (Southside) can show a month as paid while one unit is short.',

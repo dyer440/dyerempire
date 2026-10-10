@@ -25,8 +25,8 @@ export function ensureLeases(): Promise<void> {
   return ready
 }
 
-/** Leases ending within this many days are flagged, like the old spreadsheet. */
-export const EXPIRING_DAYS = 60
+/** Leases ending within this many days are flagged: time to negotiate a renewal or plan the exit. */
+export const EXPIRING_DAYS = 45
 
 export type LeaseState = 'in_term' | 'ending_soon' | 'month_to_month' | 'no_end_date' | 'ended'
 

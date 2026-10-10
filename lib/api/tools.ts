@@ -173,7 +173,7 @@ export const TOOLS: Tool[] = [
     title: 'Pending bank rows',
     description: 'Imported bank rows not yet posted to the ledger, oldest first, each with the import rule the app would suggest and candidate ledger rows it may already be (match those with match_bank_txn).',
     scope: 'read',
-    inputSchema: obj({ limit: { type: 'integer', minimum: 1, maximum: 500 } }),
+    inputSchema: obj({ limit: { type: 'integer', minimum: 1, maximum: 500 }, account_id: int('Only this bank account (1 = 7848, 2 = SL Media 3758)') }),
     annotations: READ,
     run: (a) => listPendingBank(a),
   },
@@ -594,7 +594,7 @@ export const TOOLS: Tool[] = [
     title: 'Lease terms',
     description:
       'Current lease per rented unit: tenant and contact, rent, due day, month-to-month rent, deposit, start and end dates, ' +
-      'state (in_term, ending_soon within 60 days, month_to_month, no_end_date), notes and renewal plan, and the active rent ' +
+      'state (in_term, ending_soon within 45 days, month_to_month, no_end_date), notes and renewal plan, and the active rent ' +
       'schedule amount so a mismatch shows. include_ended for history.',
     scope: 'read',
     inputSchema: obj({ property_id: int('Only this property'), include_ended: { type: 'boolean' } }),

@@ -84,14 +84,19 @@ export function ensureMedia(): Promise<void> {
           ('ree', 'The REE Trader', 100::numeric, NULL, 'SL Holdings', 'seawolf', 2)
         ) AS v(slug, name, pct, partner, dest, sources, ord)
         ON CONFLICT (slug) DO NOTHING`
-      // SL Media's checking account at US Bank, so GrokBot can import its CSV.
+      // SL Media's checking account at US Bank (ending 3758), so GrokBot can
+      // import its CSV. The id sequence is synced first: the original account
+      // was inserted with an explicit id, which left the sequence behind.
       try {
+        await sql`SELECT setval(pg_get_serial_sequence('bank_accounts', 'id'), GREATEST((SELECT max(id) FROM bank_accounts), 1))`
         await sql`
-          INSERT INTO bank_accounts (name, entity_id, csv_format)
-          SELECT 'US Bank SL Media Checking', e.id, 'usbank' FROM entities e
+          INSERT INTO bank_accounts (name, entity_id, last4, csv_format)
+          SELECT 'US Bank SL Media Checking', e.id, '3758', 'usbank' FROM entities e
           WHERE e.slug = ${MEDIA_ENTITY_SLUG}
             AND NOT EXISTS (SELECT 1 FROM bank_accounts WHERE name = 'US Bank SL Media Checking')`
-      } catch { /* older bank_accounts shape (tests) */ }
+      } catch (e) {
+        console.error('[media] could not create the SL Media bank account:', e)
+      }
       // Ledger categories for SL Media's own books. lib/api/service.ts also
       // accepts these as system categories if this insert can't run.
       try {

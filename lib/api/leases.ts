@@ -20,7 +20,7 @@ export async function listLeasesApi(input: Input) {
     count: leases.length,
     leases,
     hints: {
-      state: "in_term, ending_soon (60 days or less), month_to_month (past the end date, still renting), no_end_date, ended",
+      state: "in_term, ending_soon (45 days or less), month_to_month (past the end date, still renting), no_end_date, ended",
       schedule_rent: 'The active rent schedule amount. If it differs from monthly_rent, one of them is out of date. Ask David which.',
     },
   }

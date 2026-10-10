@@ -5,16 +5,17 @@
 import sql from '@/lib/db'
 import { bestRule, ruleToSuggestion, type ImportRule } from '@/lib/import-rules'
 import { displayName } from '@/lib/bank-import'
-import { type Input, clampInt } from './validate'
+import { type Input, clampInt, optInt } from './validate'
 
 export async function listPendingBank(input: Input) {
   const limit = clampInt(input, 'limit', 100, 1, 500)
+  const accountId = optInt(input, 'account_id')
   const pending = (await sql`
     SELECT b.id, b.account_id, a.name AS account, to_char(b.txn_date, 'YYYY-MM-DD') AS txn_date,
            b.amount::float8 AS amount, b.name_raw, b.name_norm, b.check_number, b.memo
     FROM bank_txns b
     LEFT JOIN bank_accounts a ON a.id = b.account_id
-    WHERE b.status = 'pending'
+    WHERE b.status = 'pending' AND (${accountId}::int IS NULL OR b.account_id = ${accountId}::int)
     ORDER BY b.txn_date ASC, b.id ASC
     LIMIT ${limit}
   `) as { id: number; account: string | null; txn_date: string; amount: number; name_raw: string; name_norm: string; check_number: string | null; memo: string | null }[]

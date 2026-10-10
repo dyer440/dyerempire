@@ -13,23 +13,19 @@ DyerEmpire does all of the math. You only tell it what each bank line is.
 
 ## Schedule
 
-Every Monday, straight after the US Bank checking (7848) routine, in the same session. David can also start a run by asking for one.
+Part of the single Monday 8:34 AM ET US Bank run: sign in once, download the 7848 file and the SL Media (3758) file, sign out, then send two reports (7848 with late rent, and The Coal Trader). David can also start a run by asking for one.
+
+Every DyerEmpire call below is plain HTTP with your key in the `X-API-Key` header. Replies are `{ "ok": true, "data": ... }` or `{ "ok": false, "error": { "code", "message", "details" } }`.
 
 ## Step 1. Download the SL Media CSV from US Bank
 
-1. In US Bank online banking, open **SL Media's checking account, ending in `____`**. Use no other account for this routine.
+1. In US Bank online banking, open **SL Media's checking account, ending in 3758**. Use no other account for this routine.
 2. Download a **CSV**, using these dates:
    - **First run only:** January 1, 2026 through today.
    - **Every run after that:** the last 45 days through today. DyerEmpire skips rows it already has.
 3. Do not edit the file. The header must be `"Date","Transaction","Name","Memo","Amount"`. If it isn't, stop and report it.
 
 ## Step 2. Send it to DyerEmpire
-
-Call `import_bank_csv` with:
-- `csv`: the whole file
-- `account_id`: **2** (US Bank SL Media Checking)
-
-Or send it over HTTP:
 
 ```
 POST https://www.dyerempire.com/api/v1/bank/import?account_id=2
@@ -41,7 +37,20 @@ Content-Type: text/csv
 
 ## Step 3. Post the clear Coal Trader lines (every run after the first)
 
-Call `list_pending_bank_txns` and look only at rows from account 2. Post each row that clearly fits one of these kinds with `post_media_bank_txn`, passing `bank_txn_id` and `kind`:
+Get the rows waiting to be posted:
+
+```
+GET https://www.dyerempire.com/api/v1/bank/pending?account_id=2&limit=500
+```
+
+Every row in `data.rows` is from SL Media checking. Post each row that clearly fits one of these kinds:
+
+```
+POST https://www.dyerempire.com/api/v1/media/bank/<bank row id>/post
+Content-Type: application/json
+
+{ "kind": "substack" }
+```
 
 | The bank line | Direction | `kind` |
 |---|---|---|
@@ -57,11 +66,15 @@ How to handle the replies:
 - Any other error: leave the row and report it.
 - **Anything that doesn't fit the table** (fees, software, refunds, a name you don't recognise): leave it pending. Claude posts those.
 
-Never call `void_media_entry`, `record_media_entries`, `revert_bank_txn` or `void_transaction`.
+Never call any other write endpoint (voids, reverts, record entries). Those are Claude's.
 
 ## Step 4. Check the balances
 
-Call `get_media_ledger` with `product: "tct"` and `months: 2`. The fields you need:
+```
+GET https://www.dyerempire.com/api/v1/media/tct?months=2
+```
+
+The fields you need from `data`:
 - `balances.owed_to_partner`: what Matt is owed right now
 - `next_partner_payments`: how that splits into Zelles of $10,000 or less
 - `balances.royalty_not_yet_moved`: SL Media's 12.5% not yet sent to SL Holdings
