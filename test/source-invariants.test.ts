@@ -9,7 +9,7 @@ import { join } from 'node:path'
 const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
 
 describe('deposit exclusion', () => {
-  const files = ['lib/distributions.ts', 'lib/capital.ts']
+  const files = ['lib/distributions.ts', 'lib/capital.ts', 'lib/api/reports.ts']
   for (const f of files) {
     it(`${f}: every transactions aggregation excludes deposits`, () => {
       const src = read(f)
@@ -59,5 +59,53 @@ describe('auth invariants', () => {
       expect(read(f)).not.toMatch(/const ADMIN_EMAIL = '/)
     }
     expect(read('lib/constants.ts')).toMatch(/export const ADMIN_EMAIL/)
+  })
+})
+
+describe('bot API invariants', () => {
+  it('every API route authenticates through route() or authenticate()', async () => {
+    const { readdirSync, statSync } = await import('node:fs')
+    const walk = (d: string): string[] =>
+      readdirSync(d).flatMap((f) => {
+        const p = join(d, f)
+        return statSync(p).isDirectory() ? walk(p) : f === 'route.ts' ? [p] : []
+      })
+    const routes = walk(join(process.cwd(), 'app/api'))
+    expect(routes.length).toBeGreaterThan(10)
+    for (const r of routes) {
+      const src = readFileSync(r, 'utf8')
+      const handlers = src.match(/export (const|async function) (GET|POST|PATCH|PUT|DELETE)\b/g) ?? []
+      const guarded = (src.match(/= route(<[^>]*>)?\(/g) ?? []).length
+      const selfAuth = /await authenticate\(req\)/.test(src)
+      // Unauthenticated exports are only allowed when they do nothing (405 stubs).
+      const stubs = (src.match(/status: 405/g) ?? []).length
+      expect(guarded + (selfAuth ? 1 : 0) + stubs, r).toBeGreaterThanOrEqual(handlers.length)
+    }
+  })
+  it('bots can never delete actual transactions', () => {
+    const src = read('lib/api/service.ts')
+    const deletes = src.match(/DELETE FROM transactions[^`]*/g) ?? []
+    expect(deletes.length).toBeGreaterThan(0)
+    for (const d of deletes) expect(d).toMatch(/status = 'forecast'/)
+  })
+  it('every bot write logs in the same statement', () => {
+    const src = read('lib/api/service.ts')
+    for (const verb of ['INSERT INTO transactions', 'UPDATE transactions SET', 'DELETE FROM transactions']) {
+      for (const block of src.split(verb).slice(1)) {
+        expect(block.slice(0, 1500), verb).toMatch(/INSERT INTO mutations_log/)
+      }
+    }
+  })
+  it('distributions and period closes are not writable by bots', () => {
+    for (const f of ['lib/api/service.ts', 'lib/api/tools.ts']) {
+      const src = read(f)
+      expect(src).not.toMatch(/INSERT INTO distributions|DELETE FROM distributions|INSERT INTO period_closes|DELETE FROM period_closes/)
+    }
+  })
+  it('the proxy exempts only the bot API prefixes from Clerk', () => {
+    const src = read('proxy.ts')
+    expect(src).toMatch(/'\/api\/v1\(\.\*\)'/)
+    expect(src).toMatch(/'\/api\/mcp\(\.\*\)'/)
+    expect(src).not.toMatch(/'\/api\(\.\*\)'/)
   })
 })

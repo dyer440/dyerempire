@@ -9,17 +9,23 @@
 //      is absent, so the normal fast path stays claim-only (no per-request
 //      Clerk call for the common case).
 //   2. Allowlist match is now case-insensitive (lower() both sides).
+// 2026-10: /api/v1 and /api/mcp exempted from Clerk (bot API, own key auth).
 import { clerkMiddleware, createRouteMatcher, clerkClient } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 import { neon } from '@neondatabase/serverless'
 import { ADMIN_EMAIL } from '@/lib/constants'
 
 // '/' is exact — only the homepage is public, not everything under it.
+// The bot API is "public" to Clerk ONLY: those routes authenticate every request
+// themselves with a hashed bearer API key (lib/api/keys.ts) and reject anything
+// without one. Without this exemption Clerk would redirect bots to /sign-in.
 const isPublicRoute = createRouteMatcher([
   '/',
   '/sign-in(.*)',
   '/sign-up(.*)',
   '/not-authorized',
+  '/api/v1(.*)',
+  '/api/mcp(.*)',
 ])
 
 export default clerkMiddleware(async (auth, req) => {

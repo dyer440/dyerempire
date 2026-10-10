@@ -6,6 +6,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],
+    exclude: ['test/integration/**', 'node_modules/**'],
     // lib/db.ts instantiates the Neon client at module scope, so merely importing
     // a financial lib needs this set. Never points at a real database — these
     // tests exercise pure logic and source text, they issue no queries.
