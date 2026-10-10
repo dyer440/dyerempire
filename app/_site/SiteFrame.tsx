@@ -13,6 +13,7 @@ export default async function SiteFrame({ children }: { children: React.ReactNod
   if (u.realEstate) {
     items.push({ href: '/real-estate', label: 'Properties', match: ['/real-estate', '^/real-estate/\\d+'] })
     items.push({ href: '/real-estate/rent', label: 'Rent roll', match: ['/real-estate/rent'] })
+    items.push({ href: '/real-estate/leases', label: 'Leases', match: ['/real-estate/leases'] })
   }
   if (u.insider) {
     items.push({ href: '/real-estate/companies', label: 'Companies', match: ['/real-estate/companies*', '/media*'] })

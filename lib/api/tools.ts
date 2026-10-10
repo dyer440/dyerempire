@@ -15,6 +15,7 @@ import { recordDistribution, closePeriod, reopenPeriod } from './periods'
 import { describeSchema } from './schema'
 import { listBookNotes, resolveBookNote } from './notes'
 import { voidTransaction } from './void'
+import { listLeasesApi, upsertLease, endLease } from './leases'
 import { getMediaLedger, postMediaBankTxn, recordMediaEntries, voidMediaEntry } from './media'
 import { runReadOnlySql } from './sql-runner'
 import { badRequest } from './errors'
@@ -587,6 +588,48 @@ export const TOOLS: Tool[] = [
     }, ['kind', 'id', 'confirm', 'reason']),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     run: (a, who) => voidMediaEntry(a, who),
+  },
+  {
+    name: 'list_leases',
+    title: 'Lease terms',
+    description:
+      'Current lease per rented unit: tenant and contact, rent, due day, month-to-month rent, deposit, start and end dates, ' +
+      'state (in_term, ending_soon within 60 days, month_to_month, no_end_date), notes and renewal plan, and the active rent ' +
+      'schedule amount so a mismatch shows. include_ended for history.',
+    scope: 'read',
+    inputSchema: obj({ property_id: int('Only this property'), include_ended: { type: 'boolean' } }),
+    annotations: READ,
+    run: (a) => listLeasesApi(a),
+  },
+  {
+    name: 'upsert_lease',
+    title: 'Set lease terms',
+    description:
+      'Create or correct the current lease on a unit. Only the fields you send change. unit_id can be left out for a ' +
+      'single-unit property. A different tenant_name than the current lease is refused unless new_lease: true, which ends ' +
+      'the old lease the day before start_date. Only record terms David or Betsy stated or a lease document shows.',
+    scope: 'write',
+    inputSchema: obj({
+      property_id: int('Property id'), unit_id: int('Unit id'),
+      tenant_name: str('Tenant name(s), e.g. "Brittany & Darr Fike"'), tenant_rename: str('Correct the spelling of the current tenant'),
+      tenant_phone: str('Phone'), tenant_email: str('Email'),
+      monthly_rent: money('Rent under the lease'), rent_due_day: { type: 'integer', minimum: 1, maximum: 31 },
+      mtm_rent: money('Rent if it goes month to month'), deposit_amount: money('Security deposit under the lease'),
+      start_date: date('Lease start'), end_date: date('Lease end'),
+      notes: str('Notes'), plan: str('Renewal plan or next step'),
+      new_lease: { type: 'boolean', description: 'This is a new lease (new tenant or a renewal you want kept separately)' },
+    }, ['property_id']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: (a, who) => upsertLease(a, who),
+  },
+  {
+    name: 'end_lease',
+    title: 'End a lease',
+    description: 'The tenant has left and there is no new lease yet. The unit is marked vacant unless unit_vacant: false.',
+    scope: 'write',
+    inputSchema: obj({ lease_id: int('Lease id'), ended_on: date('Last day'), unit_vacant: { type: 'boolean' } }, ['lease_id']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    run: (a, who) => endLease(a, who),
   },
 ]
 

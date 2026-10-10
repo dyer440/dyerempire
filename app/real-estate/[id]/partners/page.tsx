@@ -5,14 +5,20 @@ import { requireProperty } from '@/lib/viewer'
 import { computeQuarter } from '@/lib/distributions'
 import { computeCapitalAccounts, type OwnerYear } from '@/lib/capital'
 import { computePayback } from '@/lib/payback'
+import { computeReturns } from '@/lib/irr'
 import { distributionHistory, lastEndedQuarter } from '@/lib/views'
 import { money, longDate, quarterName } from '@/lib/format'
 
-export default async function Partners({ params }: { params: Promise<{ id: string }> }) {
+export default async function Partners({
+  params, searchParams,
+}: {
+  params: Promise<{ id: string }>; searchParams: Promise<{ fq?: string; hz?: string }>
+}) {
   const { id } = await params
   const { property: p } = await requireProperty(Number(id))
   const period = lastEndedQuarter()
 
+  const sp = await searchParams
   const [q, ca, pb, hist] = await Promise.all([
     computeQuarter(p.id, period),
     computeCapitalAccounts(p.id),
@@ -20,6 +26,14 @@ export default async function Partners({ params }: { params: Promise<{ id: strin
     distributionHistory(p.id),
   ])
   const recorded = hist.periods.find((h) => h.period === period)
+
+  // Returns: the average of the last four recorded quarters is the default
+  // forecast; the viewer can try other amounts and holding periods.
+  const recent = hist.periods.slice(0, 4)
+  const defaultFq = recent.length ? Math.round(recent.reduce((t, h) => t + h.total, 0) / recent.length) : 0
+  const fq = sp.fq !== undefined && sp.fq !== '' && Number.isFinite(Number(sp.fq)) ? Math.max(Number(sp.fq), 0) : defaultFq
+  const hz = sp.hz !== undefined && sp.hz !== '' && Number.isFinite(Number(sp.hz)) ? Math.min(Math.max(Math.round(Number(sp.hz)), 1), 50) : 25
+  const ret = pb.contributed > 0 ? await computeReturns(p.id, fq, hz) : null
   const qEnd = longDate(q.end)
 
   return (
@@ -100,6 +114,47 @@ export default async function Partners({ params }: { params: Promise<{ id: strin
         </section>
       )}
 
+      {ret && (
+        <section aria-labelledby="irr-h">
+          <h2 id="irr-h" className="font-serif text-2xl">Return on investment</h2>
+          <p className="mt-1 max-w-2xl text-[14px] text-muted">
+            The internal rate of return on the money put in, counting every distribution so far plus future quarters at the
+            amount below. No sale is assumed, so the longer the hold, the higher it climbs.
+          </p>
+          <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)]">
+            <div className="rounded-lg border border-rule bg-surface p-5">
+              <p className="text-[15px] text-muted">Internal rate of return</p>
+              <p className="num mt-1 font-serif text-4xl">{ret.irr === null ? 'Not enough yet' : `${(ret.irr * 100).toFixed(2)}%`}</p>
+              <p className="mt-2 text-[14px] text-muted">Over a {hz}-year hold.</p>
+            </div>
+            <div className="rounded-lg border border-rule bg-surface p-5">
+              <p className="text-[15px] text-muted">{ret.alreadyPaidBack ? 'Capital' : 'All capital paid back by'}</p>
+              <p className="mt-1 font-serif text-3xl">{ret.alreadyPaidBack ? 'Paid back' : ret.paybackDate ? longDate(ret.paybackDate) : 'Not within the hold'}</p>
+              <p className="mt-2 text-[14px] text-muted">At {money(fq)} a quarter.</p>
+            </div>
+            <form method="get" className="rounded-lg border border-rule bg-surface p-5">
+              <p className="text-[15px] font-medium">Try other numbers</p>
+              <div className="mt-3 grid grid-cols-2 gap-3 text-[14px]">
+                <label className="block">
+                  <span className="text-muted">Distribution per quarter</span>
+                  <input name="fq" type="number" step="1" min="0" defaultValue={fq}
+                    className="num mt-1 w-full rounded-md border border-rule bg-paper px-2 py-1.5 focus:border-brass focus:outline-none" />
+                </label>
+                <label className="block">
+                  <span className="text-muted">Years held</span>
+                  <input name="hz" type="number" step="1" min="1" max="50" defaultValue={hz}
+                    className="num mt-1 w-full rounded-md border border-rule bg-paper px-2 py-1.5 focus:border-brass focus:outline-none" />
+                </label>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button type="submit" className="rounded-md bg-ink px-3 py-1.5 text-[14px] font-medium text-white hover:bg-ink/90">Recalculate</button>
+                <span className="text-[13px] text-muted">Default is the average of the last four quarters, {money(defaultFq)}.</span>
+              </div>
+            </form>
+          </div>
+        </section>
+      )}
+
       <section aria-labelledby="cap-h">
         <h2 id="cap-h" className="font-serif text-2xl">Capital accounts</h2>
         <p className="mt-1 max-w-2xl text-[14px] text-muted">
@@ -165,7 +220,7 @@ function Step({ label, note, value, strong, final }: { label: string; note?: str
         {note && <p className="mt-0.5 text-[13px] text-muted">{note}</p>}
       </div>
       <p className={`num shrink-0 ${strong ? 'font-medium' : ''} ${final ? 'font-serif text-xl text-paid' : ''} ${value < 0 && !strong ? 'text-muted' : ''}`}>
-        {money(value)}
+        {money(value || 0)}
       </p>
     </li>
   )

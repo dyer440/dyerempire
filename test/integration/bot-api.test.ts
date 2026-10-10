@@ -46,6 +46,8 @@ import * as MediaEntries from '@/app/api/v1/media/[product]/entries/route'
 import * as MediaPost from '@/app/api/v1/media/bank/[id]/post/route'
 import * as MediaVoid from '@/app/api/v1/media/entries/[kind]/[id]/void/route'
 import * as BankRevertRoute from '@/app/api/v1/bank/[id]/revert/route'
+import * as Leases from '@/app/api/v1/leases/route'
+import * as LeaseEnd from '@/app/api/v1/leases/[id]/end/route'
 import { addNote } from '@/lib/notes'
 
 const OWNER_URL = process.env.DATABASE_URL!
@@ -1071,5 +1073,50 @@ describe('SL Media: The Coal Trader', () => {
     expect(names).toEqual(expect.arrayContaining(['get_media_ledger', 'post_media_bank_txn', 'record_media_entries', 'void_media_entry']))
     const r = await mcp({ jsonrpc: '2.0', id: 41, method: 'tools/call', params: { name: 'get_media_ledger', arguments: { product: 'ree' } } }, keys.read)
     expect(JSON.parse(r.json.result.content[0].text).product.owner_pct).toBe(100)
+  })
+})
+
+describe('leases', () => {
+  const up = (body: Record<string, unknown>, key?: string) => call(Leases.POST, { method: 'POST', body, ...(key ? { key } : {}) })
+  const soon = iso(new Date(today.getTime() + 30 * 86400000))
+  it('asks for the unit when a property has several, then creates the lease', async () => {
+    expect((await up({ property_id: ids.pA, tenant_name: 'Abi Taylor' })).json.error!.details.units.length).toBeGreaterThan(1)
+    const r = await up({ property_id: ids.pA, unit_id: ids.unitA, tenant_name: 'Abi Taylor', monthly_rent: 1120, rent_due_day: 15, start_date: '2025-06-01', end_date: soon, mtm_rent: 1150, deposit_amount: 1000, plan: 'Offer renewal' })
+    expect(r.json.ok).toBe(true)
+    expect(r.json.data.lease).toMatchObject({ tenant: 'Abi Taylor', unit_id: ids.unitA, monthly_rent: 1120, state: 'ending_soon', days_left: 30 })
+    const [u] = await q('SELECT current_tenant FROM units WHERE id = $1', [ids.unitA])
+    expect(u.current_tenant).toBe('Abi Taylor')
+  })
+  it('a partial update only changes what is sent', async () => {
+    const r = await up({ property_id: ids.pA, unit_id: ids.unitA, end_date: '2026-05-31', notes: 'Pays in two parts' })
+    expect(r.json.data.lease).toMatchObject({ monthly_rent: 1120, mtm_rent: 1150, plan: 'Offer renewal', notes: 'Pays in two parts', state: 'month_to_month' })
+  })
+  it('a different tenant needs new_lease, which ends the old one', async () => {
+    const r = await up({ property_id: ids.pA, unit_id: ids.unitA, tenant_name: 'Someone Else', monthly_rent: 1200 })
+    expect(r.json.error!.code).toBe('different_tenant')
+    const n = await up({ property_id: ids.pA, unit_id: ids.unitA, tenant_name: 'Someone Else', monthly_rent: 1200, start_date: '2026-11-01', end_date: '2027-10-31', new_lease: true })
+    expect(n.json.data.lease).toMatchObject({ tenant: 'Someone Else', state: 'in_term' })
+    const all = await call(Leases.GET, { path: `/api/v1/leases?property_id=${ids.pA}&include_ended=true` })
+    const old = all.json.data.leases.find((l: any) => l.tenant === 'Abi Taylor')
+    expect(old).toMatchObject({ status: 'ended', ended_on: '2026-10-31', state: 'ended' })
+  })
+  it('get_attention lists leases ending soon or month to month', async () => {
+    const a = await call(Attention.GET)
+    expect(a.json.data.summary.leases_ending_or_month_to_month).toBe(0)
+    await up({ property_id: ids.pA, unit_id: ids.unitA, end_date: soon })
+    const b = await call(Attention.GET)
+    expect(b.json.data.leases_ending_or_month_to_month[0]).toMatchObject({ tenant: 'Someone Else', state: 'ending_soon' })
+  })
+  it('end_lease marks the unit vacant; guards', async () => {
+    const cur = (await call(Leases.GET, { path: `/api/v1/leases?property_id=${ids.pA}` })).json.data.leases[0]
+    expect((await up({ property_id: ids.pB, tenant_name: 'X' })).status).toBe(400) // no units
+    expect((await up({ property_id: ids.pA, unit_id: ids.unitA, tenant_name: 'X' }, keys.read)).status).toBe(403)
+    const e = await call(LeaseEnd.POST, { method: 'POST', params: { id: String(cur.id) }, body: { ended_on: '2026-12-31' } })
+    expect(e.json.data).toMatchObject({ ended_on: '2026-12-31', unit_marked_vacant: true })
+    expect((await call(LeaseEnd.POST, { method: 'POST', params: { id: String(cur.id) }, body: {} })).json.error!.code).toBe('already_ended')
+    const [u] = await q('SELECT current_tenant FROM units WHERE id = $1', [ids.unitA])
+    expect(u.current_tenant).toBeNull()
+    const logs = await q(`SELECT action FROM mutations_log WHERE target_table = 'leases' ORDER BY id`)
+    expect(logs.map((l: any) => l.action)).toEqual(['lease.create', 'lease.update', 'lease.create', 'lease.update', 'lease.end'])
   })
 })

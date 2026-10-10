@@ -7,6 +7,8 @@ import { rentGrid, categoryYears, upcomingBills } from '@/lib/views'
 import { money, shortDate } from '@/lib/format'
 import { RentLegend } from '../_ui/RentStrip'
 import RentTable from '../_ui/RentTable'
+import LeaseCard from '../_ui/LeaseCard'
+import { listLeases } from '@/lib/leases'
 
 export default async function Overview({
   params, searchParams,
@@ -14,21 +16,29 @@ export default async function Overview({
   params: Promise<{ id: string }>; searchParams: Promise<{ year?: string }>
 }) {
   const { id } = await params
-  const { property: p } = await requireProperty(Number(id))
+  const { property: p, viewer } = await requireProperty(Number(id))
   const sp = await searchParams
   const thisYear = new Date().getFullYear()
   const year = /^\d{4}$/.test(sp.year || '') ? Math.min(Number(sp.year), thisYear) : thisYear
   const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`)
 
-  const [lines, cats, bills] = await Promise.all([
+  const [lines, cats, bills, leases] = await Promise.all([
     rentGrid([p.id], months),
     categoryYears(p.id, [year - 1, year]),
     upcomingBills(p.id, 90),
+    listLeases({ propertyIds: [p.id] }),
   ])
   const yearLabel = (y: number) => (y === thisYear ? `${y} so far` : String(y))
 
   return (
     <div className="space-y-12">
+      <section aria-labelledby="lease-h">
+        <h2 id="lease-h" className="font-serif text-2xl">{leases.length > 1 ? 'Leases' : 'Lease'}</h2>
+        {leases.length === 0
+          ? <p className="mt-2 text-muted">No lease on file yet.</p>
+          : <div className="mt-4 grid gap-4 lg:grid-cols-2">{leases.map((l) => <LeaseCard key={l.id} l={l} showContact={viewer.insider} />)}</div>}
+      </section>
+
       <section aria-labelledby="rent-h">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <h2 id="rent-h" className="font-serif text-2xl">Rent in {year}</h2>

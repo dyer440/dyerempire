@@ -14,6 +14,7 @@
 // Each section degrades to an error note rather than failing the whole call.
 import sql from '@/lib/db'
 import { listNotes } from '@/lib/notes'
+import { listLeases } from '@/lib/leases'
 
 // SQL rows are dynamic by nature; columns are typed at the point of use.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -201,6 +202,13 @@ export async function getAttention() {
       id: n.id, created_at: n.created_at, author: n.author_name || n.author_email, property: n.property, body: n.body,
     })))
 
+  // Leases that end within 60 days or have already run past their end date.
+  const leases = await section(async () =>
+    (await listLeases()).filter((l) => l.state === 'ending_soon' || l.state === 'month_to_month').map((l) => ({
+      lease_id: l.id, property: l.property, unit: l.unit, tenant: l.tenant, end_date: l.end_date, days_left: l.days_left,
+      state: l.state, monthly_rent: l.monthly_rent, mtm_rent: l.mtm_rent, plan: l.plan,
+    })))
+
   const pendingCount =
     pendingBank && typeof pendingBank === 'object' && 'count' in pendingBank ? Number(pendingBank.count) : 0
 
@@ -209,6 +217,7 @@ export async function getAttention() {
     summary: {
       open_notes: count(openNotes),
       late_rent_units: count(lateRent),
+      leases_ending_or_month_to_month: count(leases),
       late_rent_total: Array.isArray(lateRent) ? Math.round(lateRent.reduce((t, u) => t + u.total_owed, 0) * 100) / 100 : 0,
       rent_without_schedule: count(unscheduled),
       overdue_forecasts: count(overdue),
@@ -221,6 +230,7 @@ export async function getAttention() {
     },
     open_notes: openNotes,
     late_rent: lateRent,
+    leases_ending_or_month_to_month: leases,
     rent_without_schedule: unscheduled,
     overdue_forecasts: overdue,
     pending_bank: pendingBank,
@@ -234,6 +244,7 @@ export async function getAttention() {
       rent_without_schedule: 'These units collect rent but late_rent cannot watch them. Add a rent schedule (create_schedule) with the unit, amount and due day.',
       overdue_forecasts: 'confirm_forecast if it was paid (check the bank), delete_forecast if it will not happen.',
       schedules_without_forecasts: 'regenerate_forecasts for that property_id / entity_id.',
+      leases_ending_or_month_to_month: 'Mention leases ending within 60 days and the plan for each. Month-to-month ones are fine if intended.',
       possible_duplicates: 'Report these to David. Bots should report, not delete.',
       open_notes: 'Notes from the website note box. Post what each describes with the normal tools, matching the bank first, then resolve_note with a one-line reply. Ask David about anything ambiguous.',
       rent_gaps: 'Property-level only. Multi-unit properties (Southside) can show a month as paid while one unit is short.',
