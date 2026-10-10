@@ -11,6 +11,7 @@ import { listPendingBank } from './bank'
 import { importBankCsv } from './bank-import'
 import { postBankTxn, matchBankTxn, excludeBankTxn, revertBankTxn } from './bank-post'
 import { listSchedules, updateSchedule, createSchedule } from './schedules'
+import { recordDistribution, closePeriod, reopenPeriod } from './periods'
 import { describeSchema } from './schema'
 import { runReadOnlySql } from './sql-runner'
 import { badRequest } from './errors'
@@ -148,7 +149,7 @@ export const TOOLS: Tool[] = [
     description:
       'The Quarter Close & Distribute engine for one property and quarter: income, expenses, reserve, retained cash, ' +
       'runway distributable and the owner split, plus what was recorded and whether the period is closed. Read-only; ' +
-      'distributions are recorded by a person in the app.',
+      'record the decision with record_distribution.',
     scope: 'read',
     inputSchema: obj({ property_id: int('Property id'), period: { type: 'string', pattern: '^\\d{4}-Q[1-4]$', description: 'e.g. 2026-Q3' } }, ['property_id', 'period']),
     annotations: READ,
@@ -423,6 +424,45 @@ export const TOOLS: Tool[] = [
     }, ['category', 'amount']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     run: (a, who) => createSchedule(a, who),
+  },
+  {
+    name: 'record_distribution',
+    title: 'Record a quarter distribution',
+    description:
+      'Record what a property distributed for a quarter, split across owners by the engine percentages. $0 can always ' +
+      'be recorded. A positive amount moves real cash: send it only after the owner states the exact amount, with ' +
+      'confirm_payout: true; it must also pass the lifetime over-distribution guard (allow_over: true only if the owner ' +
+      'knowingly returns capital). Run get_quarter first. Refused once the quarter is closed.',
+    scope: 'write',
+    inputSchema: obj({
+      property_id: int('Property id'),
+      period: { type: 'string', pattern: '^\\d{4}-Q[1-4]$', description: 'e.g. 2026-Q3' },
+      amount: { type: 'number', minimum: 0, description: 'Total for the property; 0 for none' },
+      confirm_payout: { type: 'boolean', description: 'Required for amounts above 0' },
+      allow_over: { type: 'boolean', description: 'Required to exceed lifetime retained cash' },
+    }, ['property_id', 'period', 'amount']),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    run: (a, who) => recordDistribution(a, who),
+  },
+  {
+    name: 'close_period',
+    title: 'Close a quarter',
+    description:
+      'Lock a finished quarter for a property so nothing can be posted or edited inside it. Unpaid rent stays as the ' +
+      'arrears record; other leftover scheduled items in the quarter are removed. Record the distribution first.',
+    scope: 'write',
+    inputSchema: obj({ property_id: int('Property id'), period: { type: 'string', pattern: '^\\d{4}-Q[1-4]$' } }, ['property_id', 'period']),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    run: (a, who) => closePeriod(a, who),
+  },
+  {
+    name: 'reopen_period',
+    title: 'Reopen a quarter',
+    description: 'Remove the lock on a closed quarter so corrections can be made. Close it again afterwards.',
+    scope: 'write',
+    inputSchema: obj({ property_id: int('Property id'), period: { type: 'string', pattern: '^\\d{4}-Q[1-4]$' } }, ['property_id', 'period']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    run: (a, who) => reopenPeriod(a, who),
   },
   {
     name: 'regenerate_forecasts',

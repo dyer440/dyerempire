@@ -101,6 +101,9 @@ The server accepts the key with or without the `Bearer ` prefix, so either form 
 | `list_schedules` | `GET /api/v1/schedules` | read |
 | `create_schedule` | `POST /api/v1/schedules` | write |
 | `update_schedule` | `PATCH /api/v1/schedules/{id}` | write |
+| `record_distribution` | `POST /api/v1/properties/{id}/quarters/{period}/distribution` | write |
+| `close_period` | `POST /api/v1/properties/{id}/quarters/{period}/close` | write |
+| `reopen_period` | `POST /api/v1/properties/{id}/quarters/{period}/reopen` | write |
 | `regenerate_forecasts` | `POST /api/v1/forecasts/regenerate` | write |
 | `describe_schema` | `GET /api/v1/schema` | sql |
 | `run_sql` | `POST /api/v1/query` with `{ "sql": "...", "params": [] }` | sql |
@@ -135,7 +138,8 @@ These match what Betsy can do in the UI, plus a few guards that matter more for 
 - **Retries are safe.** Send an `Idempotency-Key` header (REST) or `idempotency_key` (MCP). The same key never writes twice.
 - **Bank-reconciled rows** keep their amount and date. Revert the match in Import first.
 - **Bots delete scheduled items only.** Actual transactions are deleted in the app.
-- **Distributions and period closes are read-only to bots.** They move real cash, so a person records them after the cross-check. Bots can read the quarter engine's recommendation.
+- **Distributions:** $0 records freely. A positive payout needs `confirm_payout: true` (the owner stated the exact amount) and must pass the lifetime over-distribution guard (`allow_over` to knowingly return capital).
+- **Closing a quarter** keeps unpaid rent as the arrears record and removes other leftover scheduled items. Record the distribution first.
 - **Bank rows** post with the Import screen's rules: pending only, legs add up to the cent, direction from the bank sign, category must match that direction. Each post, match, exclude and revert is one database transaction.
 - **Every write is logged** in `mutations_log` in the same SQL statement as the write, with before and after JSON. `/admin` shows the latest 25.
 

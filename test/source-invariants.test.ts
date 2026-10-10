@@ -96,10 +96,13 @@ describe('bot API invariants', () => {
       }
     }
   })
-  it('distributions and period closes are not writable by bots', () => {
-    for (const f of ['lib/api/service.ts', 'lib/api/tools.ts']) {
-      const src = read(f)
-      expect(src).not.toMatch(/INSERT INTO distributions|DELETE FROM distributions|INSERT INTO period_closes|DELETE FROM period_closes/)
+  it('bot distributions: positive payouts need explicit confirmation and the lifetime guard', () => {
+    const src = read('lib/api/periods.ts')
+    expect(src).toMatch(/confirm_payout/)
+    expect(src).toMatch(/lifetimeRetained/)
+    expect(src).toMatch(/allow_over/)
+    for (const f of ['lib/api/service.ts', 'lib/api/tools.ts', 'lib/api/bank-post.ts', 'lib/api/schedules.ts']) {
+      expect(read(f)).not.toMatch(/INSERT INTO distributions|INSERT INTO period_closes/)
     }
   })
   it('the proxy exempts only the bot API prefixes from Clerk', () => {

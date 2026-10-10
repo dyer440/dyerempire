@@ -28,6 +28,9 @@ import * as BankMatch from '@/app/api/v1/bank/[id]/match/route'
 import * as BankExclude from '@/app/api/v1/bank/[id]/exclude/route'
 import * as BankRevert from '@/app/api/v1/bank/[id]/revert/route'
 import * as Scheds from '@/app/api/v1/schedules/route'
+import * as Dist from '@/app/api/v1/properties/[id]/quarters/[period]/distribution/route'
+import * as Close from '@/app/api/v1/properties/[id]/quarters/[period]/close/route'
+import * as Reopen from '@/app/api/v1/properties/[id]/quarters/[period]/reopen/route'
 import * as Sched from '@/app/api/v1/schedules/[id]/route'
 import * as Changes from '@/app/api/v1/changes/route'
 import * as Quarter from '@/app/api/v1/properties/[id]/quarters/[period]/route'
@@ -657,6 +660,69 @@ describe('schedules and late rent', () => {
     const a = (await call(Attention.GET)).json.data
     expect(a.possible_duplicates.some((d: any) => d.amount === 812.34)).toBe(false)
     expect(a.possible_duplicates.some((d: any) => d.amount === 61.1)).toBe(true)
+  })
+})
+
+describe('distributions and closing', () => {
+  // The last fully finished quarter, relative to today.
+  const q0 = Math.floor(today.getUTCMonth() / 3) + 1
+  const lastQ = q0 === 1 ? { y: today.getUTCFullYear() - 1, q: 4 } : { y: today.getUTCFullYear(), q: q0 - 1 }
+  const period = `${lastQ.y}-Q${lastQ.q}`
+  const qStart = new Date(Date.UTC(lastQ.y, (lastQ.q - 1) * 3, 1))
+  const inQ = (day: number) => iso(new Date(qStart.getTime() + day * 86400000))
+  const pid = () => String(ids.pB)
+  const dist = (body: unknown, key?: string) => call(Dist.POST, { method: 'POST', params: { id: pid(), period }, body, key })
+
+  it('records $0 freely, split per owner, logged', async () => {
+    const r = await dist({ amount: 0 })
+    expect(r.status).toBe(200)
+    expect(r.json.data.split.every((x: any) => x.amount === 0)).toBe(true)
+    const rows = await q(`SELECT amount::float8 AS a FROM distributions WHERE property_id = $1 AND period = $2`, [ids.pB, period])
+    expect(rows.length).toBeGreaterThan(0)
+    expect((await q(`SELECT 1 FROM mutations_log WHERE action = 'distribution.record' AND target_id = $1`, [ids.pB])).length).toBe(1)
+  })
+  it('a positive payout needs confirm_payout, then the lifetime guard', async () => {
+    const r = await dist({ amount: 10 })
+    expect(r.status).toBe(409)
+    expect(r.json.error?.code).toBe('needs_confirmation')
+    const over = await dist({ amount: 10_000_000 - 1, confirm_payout: true })
+    expect(over.json.error?.code).toBe('over_distribution')
+  })
+  it('splits to the exact cent', async () => {
+    // pA is 50/50
+    const r = await call(Dist.POST, { method: 'POST', params: { id: String(ids.pA), period }, body: { amount: 100.01, confirm_payout: true, allow_over: true } })
+    expect(r.status).toBe(200)
+    const amts = r.json.data.split.map((x: any) => x.amount)
+    expect(Math.round(amts.reduce((a: number, b: number) => a + b, 0) * 100)).toBe(10001)
+    await call(Dist.POST, { method: 'POST', params: { id: String(ids.pA), period }, body: { amount: 0 } })
+  })
+  it('close keeps unpaid rent as arrears, removes other leftovers, then locks', async () => {
+    const [rent] = await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status, method) VALUES ($1,'income','Rental Income',1350,$2,'forecast','scheduled') RETURNING id`, [ids.pB, inQ(20)])
+    const [fee] = await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status, method) VALUES ($1,'expense','Utilities',7.15,$2,'forecast','scheduled') RETURNING id`, [ids.pB, inQ(25)])
+    const r = await call(Close.POST, { method: 'POST', params: { id: pid(), period } })
+    expect(r.status).toBe(200)
+    expect(r.json.data.kept_unpaid_rent.map((x: any) => x.id)).toContain(rent.id)
+    expect(r.json.data.removed_forecasts.map((x: any) => x.id)).toContain(fee.id)
+    expect(r.json.data.distribution_recorded).toBe(0)
+    expect(await q('SELECT 1 FROM transactions WHERE id = $1', [fee.id])).toHaveLength(0)
+    expect(await q('SELECT 1 FROM transactions WHERE id = $1', [rent.id])).toHaveLength(1)
+    // locked: no posting, no distribution change, no second close
+    const post = await call(Txns.POST, { method: 'POST', body: { property_id: ids.pB, category: 'Utilities', amount: 3, txn_date: inQ(30) } })
+    expect(post.json.error?.code).toBe('period_closed')
+    expect((await dist({ amount: 0 })).json.error?.code).toBe('period_closed')
+    expect((await call(Close.POST, { method: 'POST', params: { id: pid(), period } })).json.error?.code).toBe('already_closed')
+    const [log] = await q(`SELECT after FROM mutations_log WHERE action = 'period.close' AND target_id = $1`, [ids.pB])
+    expect(log.after.kept_unpaid_rent).toHaveLength(1)
+  })
+  it('reopen unlocks; closing an unfinished quarter is refused', async () => {
+    const r = await call(Reopen.POST, { method: 'POST', params: { id: pid(), period } })
+    expect(r.json.data.closed).toBe(false)
+    expect((await call(Reopen.POST, { method: 'POST', params: { id: pid(), period } })).json.error?.code).toBe('not_closed')
+    const cur = `${today.getUTCFullYear()}-Q${q0}`
+    expect((await call(Close.POST, { method: 'POST', params: { id: pid(), period: cur } })).status).toBe(400)
+  })
+  it('read key cannot record or close', async () => {
+    expect((await dist({ amount: 0 }, keys.read)).status).toBe(403)
   })
 })
 

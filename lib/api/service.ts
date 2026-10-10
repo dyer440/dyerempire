@@ -13,8 +13,8 @@
 //     the over-distribution guard).
 //   • Every write and its audit row are ONE SQL statement (data-modifying CTE),
 //     so nothing can change without landing in mutations_log.
-//   • Distributions and period closes are read-only to bots by design: they move
-//     real cash, and that number gets a human cross-check.
+//   • Distributions and period closes live in lib/api/periods.ts: $0 records and
+//     closes are routine; a positive payout needs the owner's explicit confirmation.
 //
 // ENTITY SCOPE: entity_id means that entity's OWN books (property_id IS NULL),
 // matching /real-estate/entity/[slug] and /real-estate/slcm.
@@ -528,7 +528,7 @@ export async function getQuarter(input: Input) {
     is_closed: closed.length > 0,
     recorded_distributions: recorded,
     computation,
-    note: 'runwayDistributable is a model recommendation. Distributions are recorded by a person in the app after a cross-check, never by a bot.',
+    note: 'runwayDistributable is a model recommendation. A positive payout is recorded only after the owner confirms the exact amount (record_distribution with confirm_payout).',
   }
 }
 
