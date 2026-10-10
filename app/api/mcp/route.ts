@@ -1,8 +1,8 @@
 // app/api/mcp/route.ts
 // MCP endpoint (Streamable HTTP, stateless, JSON responses).
-//   Cursor:  .cursor/mcp.json → { "url": "https://dyerempire.com/api/mcp",
+//   Cursor:  .cursor/mcp.json → { "url": "https://www.dyerempire.com/api/mcp",
 //                                 "headers": { "Authorization": "Bearer de_..." } }
-//   Grok:    remote MCP tool with server_url https://dyerempire.com/api/mcp and
+//   Grok:    remote MCP tool with server_url https://www.dyerempire.com/api/mcp and
 //            authorization "Bearer de_..." (see docs/bot-api.md).
 import { authenticate } from '@/lib/api/keys'
 import { handleMcpPayload } from '@/lib/api/mcp'

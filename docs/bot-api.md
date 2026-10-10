@@ -2,17 +2,19 @@
 
 The website and Neon stay the system of record. Bots read and write through one API with two front doors:
 
-- **REST** at `https://dyerempire.com/api/v1/...` for scripts, n8n-style workflows, or anything that speaks HTTP.
-- **MCP** at `https://dyerempire.com/api/mcp` for AI clients. GrokBot and Cursor both connect here and see the API as a set of tools.
+- **REST** at `https://www.dyerempire.com/api/v1/...` for scripts, n8n-style workflows, or anything that speaks HTTP.
+- **MCP** at `https://www.dyerempire.com/api/mcp` for AI clients. GrokBot and Cursor both connect here and see the API as a set of tools.
 
 Both doors share one service layer (`lib/api/`), so the same rules apply however a bot connects.
+
+**Use `https://www.dyerempire.com`.** The bare domain redirects to `www`, and some clients drop the request body (the CSV upload, MCP calls) when they follow a redirect.
 
 ## Install, in order
 
 Each step can be deployed and checked on its own.
 
 1. **Neon.** Run `migrations/2026-10_bot_api.sql` in the SQL editor. It creates `api_keys` and `mutations_log`. It is idempotent.
-2. **Code.** Commit and push. Vercel deploys. Check that `curl https://dyerempire.com/api/v1` returns `401` with a JSON body (not a redirect to sign-in). The rest of the site is unchanged and still behind Clerk.
+2. **Code.** Commit and push. Vercel deploys. Check that `curl https://www.dyerempire.com/api/v1` returns `401` with a JSON body (not a redirect to sign-in). The rest of the site is unchanged and still behind Clerk.
 3. **Keys.** Open `/admin`, scroll to **Bot API**, and create one key per bot (for example `GrokBot` and `Cursor`). The key is shown once. Store it in your password manager.
 4. **Read-only database role (recommended).** Edit the password placeholder in `migrations/2026-10_bot_readonly_role.sql`, run it, then add `DATABASE_URL_READONLY` in Vercel and redeploy. This makes ad-hoc bot SQL physically unable to write.
 5. **Connect the bots** (below).
@@ -35,7 +37,7 @@ Put this in your global `~/.cursor/mcp.json` so the key never sits in the repo. 
 {
   "mcpServers": {
     "dyerempire": {
-      "url": "https://dyerempire.com/api/mcp",
+      "url": "https://www.dyerempire.com/api/mcp",
       "headers": { "Authorization": "Bearer de_YOUR_CURSOR_KEY" }
     }
   }
@@ -59,7 +61,7 @@ resp = client.responses.create(
     input=[{"role": "user", "content": "Run the DyerEmpire weekly maintenance check and summarize what needs me."}],
     tools=[{
         "type": "mcp",
-        "server_url": "https://dyerempire.com/api/mcp",
+        "server_url": "https://www.dyerempire.com/api/mcp",
         "server_label": "dyerempire",
         "server_description": "Books for six rental properties and their entities",
         "authorization": os.environ["DYER_GROKBOT_KEY"],
@@ -101,15 +103,15 @@ The server accepts the key with or without the `Bearer ` prefix, so either form 
 
 ```bash
 KEY=de_...
-curl -s -H "Authorization: Bearer $KEY" https://dyerempire.com/api/v1/attention
+curl -s -H "Authorization: Bearer $KEY" https://www.dyerempire.com/api/v1/attention
 
 curl -s -H "Authorization: Bearer $KEY" \
-  "https://dyerempire.com/api/v1/pnl?property_id=4&from=2026-01-01&group_by=month"
+  "https://www.dyerempire.com/api/v1/pnl?property_id=4&from=2026-01-01&group_by=month"
 
 curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -H "Idempotency-Key: 2026-10-10-belford-utilities" \
   -d '{"property_id":3,"category":"Utilities","amount":88.50,"txn_date":"2026-10-09","description":"AEP"}' \
-  https://dyerempire.com/api/v1/transactions
+  https://www.dyerempire.com/api/v1/transactions
 ```
 
 Responses are `{ "ok": true, "data": ... }` or `{ "ok": false, "error": { "code", "message", "details" } }`.
