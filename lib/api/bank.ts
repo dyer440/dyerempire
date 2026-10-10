@@ -1,7 +1,7 @@
 // lib/api/bank.ts
-// Read-only view of the bank import queue, with the same rule suggestion the
-// /real-estate/import screen shows. Posting stays in the app for now: postBankTxn
-// is tied to the Clerk session, and splitting it out is its own change.
+// Read-only view of the bank import queue, with the same rule suggestion and
+// match candidates the /real-estate/import screen shows. Posting is in
+// lib/api/bank-post.ts.
 import sql from '@/lib/db'
 import { bestRule, ruleToSuggestion, type ImportRule } from '@/lib/import-rules'
 import { displayName } from '@/lib/bank-import'
@@ -26,6 +26,27 @@ export async function listPendingBank(input: Input) {
     FROM import_rules
   `) as ImportRule[]
 
+  // Ledger rows this bank line probably IS: same amount and direction within ±5
+  // days, not yet tied to a bank row. Same query as the Import screen.
+  const cands = (await sql`
+    SELECT b.id AS bank_id, t.id, t.status, t.category, t.amount::float8 AS amount,
+           to_char(t.txn_date, 'YYYY-MM-DD') AS txn_date, t.description,
+           COALESCE(p.name, e.name) AS books
+    FROM bank_txns b
+    JOIN transactions t
+      ON t.amount = ABS(b.amount)
+     AND t.txn_date BETWEEN b.txn_date - 5 AND b.txn_date + 5
+     AND t.status IN ('actual', 'forecast')
+     AND ((b.amount > 0 AND t.type = 'income') OR (b.amount < 0 AND t.type = 'expense'))
+    LEFT JOIN properties p ON p.id = t.property_id
+    LEFT JOIN entities e ON e.id = t.entity_id AND t.property_id IS NULL
+    WHERE b.status = 'pending'
+      AND NOT EXISTS (SELECT 1 FROM bank_txn_legs l WHERE l.transaction_id = t.id)
+    ORDER BY t.status DESC, t.txn_date
+  `) as { bank_id: number; id: number; status: string; category: string; amount: number; txn_date: string; description: string | null; books: string | null }[]
+  const candOf = new Map<number, typeof cands>()
+  for (const c of cands) candOf.set(c.bank_id, [...(candOf.get(c.bank_id) || []), c])
+
   return {
     count: pending.length,
     rows: pending.map((b) => {
@@ -39,8 +60,11 @@ export async function listPendingBank(input: Input) {
         counterparty: displayName({ nameRaw: b.name_raw, checkNumber: b.check_number, nameNorm: b.name_norm }),
         memo: b.memo,
         suggestion: rule ? ruleToSuggestion(rule) : null,
+        candidates: (candOf.get(b.id) || []).map(({ bank_id: _b, ...c }) => { void _b; return c }),
       }
     }),
-    note: 'Post these in /real-estate/import. Bot posting of bank rows is not enabled yet.',
+    note:
+      'For each row: if a candidate is the same item, match_bank_txn to it (a forecast is confirmed at the cleared ' +
+      'amount). Otherwise post_bank_txn using the suggestion, or exclude_bank_txn if it is not business.',
   }
 }

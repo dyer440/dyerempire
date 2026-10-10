@@ -36,12 +36,12 @@ export type Actor = { actor: string; keyId: number | null; source: 'api' | 'mcp'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = Record<string, any>
 
-function refreshUi() {
+export function refreshUi() {
   // Outside a Next request (tests, scripts) revalidatePath throws; that's fine.
   try { revalidatePath('/real-estate', 'layout') } catch { /* not in a request */ }
 }
 
-async function isDateClosed(propertyId: number, date: string): Promise<boolean> {
+export async function isDateClosed(propertyId: number, date: string): Promise<boolean> {
   const rows = (await sql`
     SELECT 1 FROM period_closes
     WHERE property_id = ${propertyId} AND ${date}::date BETWEEN period_start AND period_end
@@ -50,7 +50,7 @@ async function isDateClosed(propertyId: number, date: string): Promise<boolean> 
   return rows.length > 0
 }
 
-function closedError(date: string) {
+export function closedError(date: string) {
   return conflict('period_closed', `${date} falls in a closed period for that property and is locked. Reopen the period in the app first.`)
 }
 
@@ -73,7 +73,7 @@ async function categoryKinds(): Promise<Map<string, 'income' | 'expense'>> {
 }
 
 /** Case-insensitive category resolution, so "property taxes" → "Property Taxes". */
-async function resolveCategory(raw: string): Promise<{ name: string; kind: 'income' | 'expense' }> {
+export async function resolveCategory(raw: string): Promise<{ name: string; kind: 'income' | 'expense' }> {
   const kinds = await categoryKinds()
   for (const [name, kind] of kinds) {
     if (name.toLowerCase() === raw.trim().toLowerCase()) return { name, kind }

@@ -9,6 +9,7 @@ import { getPnl } from './reports'
 import { getAttention } from './attention'
 import { listPendingBank } from './bank'
 import { importBankCsv } from './bank-import'
+import { postBankTxn, matchBankTxn, excludeBankTxn, revertBankTxn } from './bank-post'
 import { describeSchema } from './schema'
 import { runReadOnlySql } from './sql-runner'
 import { badRequest } from './errors'
@@ -164,7 +165,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'list_pending_bank_txns',
     title: 'Pending bank rows',
-    description: 'Imported bank rows not yet posted to the ledger, oldest first, each with the import rule the app would suggest.',
+    description: 'Imported bank rows not yet posted to the ledger, oldest first, each with the import rule the app would suggest and candidate ledger rows it may already be (match those with match_bank_txn).',
     scope: 'read',
     inputSchema: obj({ limit: { type: 'integer', minimum: 1, maximum: 500 } }),
     annotations: READ,
@@ -295,6 +296,72 @@ export const TOOLS: Tool[] = [
     }, ['csv']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     run: (a, who) => importBankCsv(a, who),
+  },
+  {
+    name: 'post_bank_txn',
+    title: 'Post a bank row',
+    description:
+      'Book a pending bank row to the ledger as new actual transaction(s). Direction comes from the bank sign. One leg ' +
+      'with no amount takes the whole bank amount; to split (e.g. a payment covering two properties) send several legs ' +
+      'that add up exactly. Each leg: property_id or entity_id, category (must match direction), optional unit_id, ' +
+      'rental_period (YYYY-MM, rent), description, is_deposit (security deposit collected). Pass rule_id when using the ' +
+      'suggested rule. If a candidate in list_pending_bank_txns is the same item, use match_bank_txn instead.',
+    scope: 'write',
+    inputSchema: obj({
+      bank_txn_id: int('Pending bank row id'),
+      legs: {
+        type: 'array', minItems: 1, maxItems: 20,
+        items: obj({
+          property_id: int('Property books'),
+          entity_id: int('Entity books (SLCM, SL Media...)'),
+          category: str('Exact category name'),
+          amount: money('Leg amount; omit for a single leg'),
+          unit_id: int('Unit'),
+          rental_period: { type: 'string', pattern: '^\\d{4}-\\d{2}$' },
+          description: str('Memo; defaults to the bank counterparty'),
+          is_deposit: { type: 'boolean' },
+        }),
+      },
+      rule_id: int('Import rule that suggested this posting'),
+    }, ['bank_txn_id', 'legs']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    run: (a, who) => postBankTxn(a, who),
+  },
+  {
+    name: 'match_bank_txn',
+    title: 'Match a bank row to the ledger',
+    description:
+      'Tie a pending bank row to what is already in the ledger. If transaction_id is a scheduled (forecast) item it is ' +
+      'confirmed at the amount and date that actually cleared. If it is an existing actual (or several, via ' +
+      'transaction_ids) they must add up to the bank amount and are linked as-is.',
+    scope: 'write',
+    inputSchema: obj({
+      bank_txn_id: int('Pending bank row id'),
+      transaction_id: int('Forecast or actual to match'),
+      transaction_ids: { type: 'array', items: { type: 'integer', minimum: 1 }, description: 'Several actuals that together equal the bank row' },
+    }, ['bank_txn_id']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    run: (a, who) => matchBankTxn(a, who),
+  },
+  {
+    name: 'exclude_bank_txn',
+    title: 'Exclude a bank row',
+    description: 'Mark a pending bank row as not business (personal spending, a transfer between your own accounts). Nothing is booked.',
+    scope: 'write',
+    inputSchema: obj({ bank_txn_id: int('Pending bank row id'), reason: str('Why'), rule_id: int('Rule that suggested excluding') }, ['bank_txn_id', 'reason']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: (a, who) => excludeBankTxn(a, who),
+  },
+  {
+    name: 'revert_bank_txn',
+    title: 'Undo a bank posting',
+    description:
+      'Put a posted, matched or excluded bank row back to pending: ledger rows it created are removed, a confirmed ' +
+      'scheduled item goes back to scheduled, links are dropped. Refused if it touches a closed period.',
+    scope: 'write',
+    inputSchema: obj({ bank_txn_id: int('Bank row id') }, ['bank_txn_id']),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    run: (a, who) => revertBankTxn(a, who),
   },
   {
     name: 'regenerate_forecasts',

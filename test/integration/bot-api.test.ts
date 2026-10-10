@@ -22,6 +22,11 @@ import * as Regen from '@/app/api/v1/forecasts/regenerate/route'
 import * as Pnl from '@/app/api/v1/pnl/route'
 import * as Attention from '@/app/api/v1/attention/route'
 import * as Bank from '@/app/api/v1/bank/pending/route'
+import * as BankImport from '@/app/api/v1/bank/import/route'
+import * as BankPost from '@/app/api/v1/bank/[id]/post/route'
+import * as BankMatch from '@/app/api/v1/bank/[id]/match/route'
+import * as BankExclude from '@/app/api/v1/bank/[id]/exclude/route'
+import * as BankRevert from '@/app/api/v1/bank/[id]/revert/route'
 import * as Changes from '@/app/api/v1/changes/route'
 import * as Quarter from '@/app/api/v1/properties/[id]/quarters/[period]/route'
 import * as Capital from '@/app/api/v1/properties/[id]/capital/route'
@@ -196,6 +201,11 @@ describe('auth', () => {
   it('accepts X-API-Key and a bare Authorization token as well as Bearer', async () => {
     expect((await call(Props.GET, { key: null, headers: { 'x-api-key': keys.read } })).status).toBe(200)
     expect((await call(Props.GET, { key: null, headers: { authorization: keys.read } })).status).toBe(200)
+    // Claude's connector UI: custom header name, value with or without "Bearer "
+    expect((await call(Props.GET, { key: null, headers: { apikey: keys.read } })).status).toBe(200)
+    expect((await call(Props.GET, { key: null, headers: { apikey: `Bearer ${keys.read}` } })).status).toBe(200)
+    expect((await call(Props.GET, { key: null, headers: { 'api-key': keys.read } })).status).toBe(200)
+    expect((await call(Props.GET, { key: null, headers: { apikey: 'Bearer nope' } })).status).toBe(401)
   })
   it('index reports the bot and its scopes', async () => {
     const r = await call(Index.GET, { key: keys.read })
@@ -409,13 +419,179 @@ describe('maintenance', () => {
   })
   it('pending bank rows carry the rule suggestion', async () => {
     const r = await call(Bank.GET)
-    expect(r.json.data.rows[0]).toMatchObject({ amount: -196.25, direction: 'debit' })
-    expect(r.json.data.rows[0].suggestion).toMatchObject({ kind: 'post', target: `property:${ids.pB}`, category: 'Other Expense' })
+    expect(r.json.data.rows.find((x: any) => x.amount === -196.25)).toMatchObject({ direction: 'debit' })
+    expect(r.json.data.rows.find((x: any) => x.amount === -196.25).suggestion).toMatchObject({ kind: 'post', target: `property:${ids.pB}`, category: 'Other Expense' })
+  })
+  it('imports a US Bank CSV, skips rows already imported, and logs it', async () => {
+    const csv = [
+      '"Date","Transaction","Name","Memo","Amount"',
+      `"${daysAgo(2)}","DEBIT","AEP APPALACHIAN POWER","WEB PMT","-91.20"`,
+      `"${daysAgo(2)}","DEBIT","CITY OF HUNTINGTON SANITARY","","-7.15"`,
+      `"${daysAgo(2)}","DEBIT","CITY OF HUNTINGTON SANITARY","","-7.15"`,
+      `"${daysAgo(1)}","CREDIT","ZELLE FROM TENANT","","1350.00"`,
+    ].join('\n')
+    const a = await call(BankImport.POST, { method: 'POST', body: { account_id: 1, csv } })
+    expect(a.status).toBe(201)
+    expect(a.json.data).toMatchObject({ rows_in_file: 4, inserted: 4, already_imported: 0 })
+    // same file again as raw text/csv: nothing new
+    const req = new Request(BASE + '/api/v1/bank/import?account_id=1', {
+      method: 'POST', headers: { authorization: `Bearer ${keys.full}`, 'content-type': 'text/csv' }, body: csv,
+    })
+    const b = await (await BankImport.POST(req)).json()
+    expect(b.data).toMatchObject({ inserted: 0, already_imported: 4 })
+    const [log] = await q(`SELECT after FROM mutations_log WHERE action = 'bank.import_csv' ORDER BY id LIMIT 1`)
+    expect(log.after.new_bank_txn_ids).toHaveLength(4)
+    const bad = await call(BankImport.POST, { method: 'POST', body: { csv: 'a,b\n1,2' } })
+    expect(bad.json.error?.code).toBe('bad_csv')
+    const ro = await call(BankImport.POST, { method: 'POST', key: keys.read, body: { csv } })
+    expect(ro.status).toBe(403)
   })
   it('changes feed lists bot writes', async () => {
     const r = await call(Changes.GET, { path: '/api/v1/changes?actor=bot:TestBot&limit=5' })
     expect(r.json.data.changes.length).toBe(5)
     expect(r.json.data.changes[0].before).toBeNull() // detail off
+  })
+})
+
+describe('bank posting', () => {
+  let n = 0
+  const bankRow = async (amount: number, date = daysAgo(3), name = 'TEST PAYEE') => {
+    n++
+    const [r] = await q(`INSERT INTO bank_txns (account_id, txn_date, amount, name_raw, name_norm, import_hash)
+                         VALUES (1, $1, $2, $3, $3, $4) RETURNING id`, [date, amount, name, `t-${n}-${Date.now()}`])
+    return String(r.id)
+  }
+  const post = (id: string, body: unknown, key?: string) => call(BankPost.POST, { method: 'POST', params: { id }, body, key })
+
+  it('the race guard aborts on a row that is no longer pending', async () => {
+    const id = await bankRow(-1.23)
+    const guard = `SELECT 1 / (CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS ok FROM bank_txns WHERE id = $1`
+    expect((await q(guard, [id]))[0].ok).toBe(1)
+    await q(`UPDATE bank_txns SET status = 'posted' WHERE id = $1`, [id])
+    await expect(q(guard, [id])).rejects.toThrow(/division by zero/)
+  })
+  it('posts a single leg for the full amount, atomically logged', async () => {
+    const id = await bankRow(-91.2, daysAgo(3), 'AEP')
+    const r = await post(id, { legs: [{ property_id: ids.pB, category: 'Utilities' }] })
+    expect(r.status).toBe(200)
+    expect(r.json.data.bank_txn.status).toBe('posted')
+    expect(r.json.data.legs).toHaveLength(1)
+    expect(r.json.data.legs[0]).toMatchObject({ link_type: 'created', amount: 91.2, category: 'Utilities', type: 'expense', books: 'Belford' })
+    const [t] = await q('SELECT method, created_by, description FROM transactions WHERE id = $1', [r.json.data.legs[0].transaction_id])
+    expect(t).toEqual({ method: 'import', created_by: 'bot:TestBot', description: 'AEP' })
+    const [log] = await q(`SELECT after FROM mutations_log WHERE action = 'bank.post' AND target_id = $1`, [Number(id)])
+    expect(log.after.legs).toHaveLength(1)
+    const again = await post(id, { legs: [{ property_id: ids.pB, category: 'Utilities' }] })
+    expect(again.status).toBe(409)
+    expect(again.json.error?.code).toBe('already_resolved')
+  })
+  it('splits a credit across properties and requires legs to add up', async () => {
+    const id = await bankRow(1350, daysAgo(4), 'ZELLE SPLIT')
+    const bad = await post(id, { legs: [{ property_id: ids.pA, category: 'Rental Income', amount: 1000 }, { property_id: ids.pB, category: 'Rental Income', amount: 300 }] })
+    expect(bad.status).toBe(400)
+    const noAmt = await post(id, { legs: [{ property_id: ids.pA, category: 'Rental Income' }, { property_id: ids.pB, category: 'Rental Income' }] })
+    expect(noAmt.status).toBe(400)
+    const r = await post(id, {
+      legs: [
+        { property_id: ids.pA, unit_id: ids.unitA, category: 'Rental Income', amount: 1000, rental_period: ym(monthStart(0)) },
+        { property_id: ids.pB, category: 'Rental Income', amount: 350 },
+      ],
+    })
+    expect(r.status).toBe(200)
+    expect(r.json.data.legs.map((l: any) => l.amount).sort()).toEqual([1000, 350].sort())
+    expect(r.json.data.legs.find((l: any) => l.amount === 1000).rental_period).toBe(ym(monthStart(0)))
+  })
+  it('refuses a category that fights the bank direction, and deposits on debits', async () => {
+    const id = await bankRow(-50)
+    const r = await post(id, { legs: [{ property_id: ids.pB, category: 'Rental Income' }] })
+    expect(r.status).toBe(400)
+    const d = await post(id, { legs: [{ property_id: ids.pB, is_deposit: true }] })
+    expect(d.status).toBe(400)
+    const cred = await bankRow(25)
+    const refund = await post(cred, { legs: [{ property_id: ids.pB, category: 'Utilities' }] })
+    expect(refund.json.error?.message).toMatch(/Other Income/)
+  })
+  it('posts a security deposit the UI way (excluded from P&L)', async () => {
+    const id = await bankRow(900, daysAgo(2), 'NEW TENANT')
+    const r = await post(id, { legs: [{ property_id: ids.pB, is_deposit: true }] })
+    expect(r.json.data.legs[0]).toMatchObject({ is_deposit: true, category: 'Rental Income' })
+  })
+  it('refuses a closed period', async () => {
+    const id = await bankRow(-40, '2026-02-15')
+    const r = await post(id, { legs: [{ property_id: ids.pA, category: 'Utilities' }] })
+    expect(r.status).toBe(409)
+    expect(r.json.error?.code).toBe('period_closed')
+  })
+  it('posts to entity books', async () => {
+    const id = await bankRow(-47.7, daysAgo(2), 'ADOBE')
+    const r = await post(id, { legs: [{ entity_id: ids.slcm, category: 'Payroll' }] })
+    expect(r.json.data.legs[0].books).toBe('Second Line Capital Management LLC')
+  })
+  it('lists candidates and matches a scheduled item at the cleared amount', async () => {
+    const [f] = await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status, schedule_id, method)
+                         VALUES ($1, 'expense', 'Insurance', 7.15, $2, 'forecast', $3, 'scheduled') RETURNING id`, [ids.pB, daysAgo(6), ids.schedule])
+    const id = await bankRow(-7.15, daysAgo(4), 'SANITARY')
+    const list = await call(Bank.GET)
+    const row = list.json.data.rows.find((x: any) => String(x.id) === id)
+    expect(row.candidates.map((c: any) => c.id)).toContain(f.id)
+    // bank cleared at the forecast amount; also prove amount adoption with a second one
+    const r = await call(BankMatch.POST, { method: 'POST', params: { id }, body: { transaction_id: f.id } })
+    expect(r.status).toBe(200)
+    expect(r.json.data.bank_txn.status).toBe('linked')
+    expect(r.json.data.legs[0]).toMatchObject({ link_type: 'confirmed', status: 'actual' })
+    const [g] = await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status, schedule_id, method)
+                         VALUES ($1, 'expense', 'Insurance', 50, $2, 'forecast', $3, 'scheduled') RETURNING id`, [ids.pB, daysAgo(9), ids.schedule])
+    const id2 = await bankRow(-52.5, daysAgo(8), 'INSURER')
+    const r2 = await call(BankMatch.POST, { method: 'POST', params: { id: id2 }, body: { transaction_id: g.id } })
+    expect(r2.json.data.note).toMatch(/booked at 52.50/)
+    const [gt] = await q('SELECT amount::float8 AS amount, txn_date::text AS d, status FROM transactions WHERE id = $1', [g.id])
+    expect(gt).toEqual({ amount: 52.5, d: daysAgo(8), status: 'actual' })
+    ids.matchedForecast = g.id
+    ids.matchedBank = Number(id2)
+  })
+  it('links existing actuals only when they add up', async () => {
+    const [a] = await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status) VALUES ($1,'expense','Utilities',30,$2,'actual') RETURNING id`, [ids.pB, daysAgo(5)])
+    const [b] = await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status) VALUES ($1,'expense','Utilities',20,$2,'actual') RETURNING id`, [ids.pB, daysAgo(5)])
+    const id = await bankRow(-50)
+    const bad = await call(BankMatch.POST, { method: 'POST', params: { id }, body: { transaction_ids: [a.id] } })
+    expect(bad.status).toBe(400)
+    const ok = await call(BankMatch.POST, { method: 'POST', params: { id }, body: { transaction_ids: [a.id, b.id] } })
+    expect(ok.json.data.legs).toHaveLength(2)
+    const id2 = await bankRow(-30)
+    const dup = await call(BankMatch.POST, { method: 'POST', params: { id: id2 }, body: { transaction_id: a.id } })
+    expect(dup.json.error?.code).toBe('already_linked')
+  })
+  it('excludes with a reason', async () => {
+    const id = await bankRow(-500, daysAgo(2), 'TRANSFER TO 3529')
+    expect((await call(BankExclude.POST, { method: 'POST', params: { id }, body: {} })).status).toBe(400)
+    const r = await call(BankExclude.POST, { method: 'POST', params: { id }, body: { reason: 'transfer between own accounts' } })
+    expect(r.json.data.bank_txn).toMatchObject({ status: 'excluded', exclude_reason: 'transfer between own accounts' })
+    const back = await call(BankRevert.POST, { method: 'POST', params: { id } })
+    expect(back.json.data.bank_txn.status).toBe('pending')
+  })
+  it('revert undoes a post (rows removed) and a forecast match (back to scheduled)', async () => {
+    const id = await bankRow(-61.25, daysAgo(2), 'TO UNDO')
+    const p = await post(id, { legs: [{ property_id: ids.pB, category: 'Utilities' }] })
+    const created = p.json.data.legs[0].transaction_id
+    const r = await call(BankRevert.POST, { method: 'POST', params: { id } })
+    expect(r.json.data).toMatchObject({ bank_txn: { status: 'pending' }, legs: [] })
+    expect(await q('SELECT 1 FROM transactions WHERE id = $1', [created])).toHaveLength(0)
+    const r2 = await call(BankRevert.POST, { method: 'POST', params: { id: String(ids.matchedBank) } })
+    expect(r2.status).toBe(200)
+    const [f] = await q('SELECT status FROM transactions WHERE id = $1', [ids.matchedForecast])
+    expect(f.status).toBe('forecast')
+    const [log] = await q(`SELECT before FROM mutations_log WHERE action = 'bank.revert' AND target_id = $1`, [ids.matchedBank])
+    expect(log.before.legs[0].link_type).toBe('confirmed')
+    expect((await call(BankRevert.POST, { method: 'POST', params: { id } })).json.error?.code).toBe('not_resolved')
+  })
+  it('read key cannot post; MCP lists the bank tools', async () => {
+    const id = await bankRow(-5)
+    expect((await post(id, { legs: [{ property_id: ids.pB, category: 'Utilities' }] }, keys.read)).status).toBe(403)
+    const list = await mcp({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+    const names = list.json.result.tools.map((t: any) => t.name)
+    expect(names).toEqual(expect.arrayContaining(['post_bank_txn', 'match_bank_txn', 'exclude_bank_txn', 'revert_bank_txn']))
+    const viaMcp = await mcp({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'post_bank_txn', arguments: { bank_txn_id: Number(id), legs: [{ property_id: ids.pB, category: 'Utilities' }] } } })
+    expect(viaMcp.json.result.isError).toBe(false)
   })
 })
 

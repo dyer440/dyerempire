@@ -93,6 +93,11 @@ The server accepts the key with or without the `Bearer ` prefix, so either form 
 | `update_transaction` | `PATCH /api/v1/transactions/{id}` | write |
 | `confirm_forecast` | `POST /api/v1/transactions/{id}/confirm` | write |
 | `delete_forecast` | `DELETE /api/v1/transactions/{id}` | write |
+| `import_bank_csv` | `POST /api/v1/bank/import` | write |
+| `post_bank_txn` | `POST /api/v1/bank/{id}/post` | write |
+| `match_bank_txn` | `POST /api/v1/bank/{id}/match` | write |
+| `exclude_bank_txn` | `POST /api/v1/bank/{id}/exclude` | write |
+| `revert_bank_txn` | `POST /api/v1/bank/{id}/revert` | write |
 | `regenerate_forecasts` | `POST /api/v1/forecasts/regenerate` | write |
 | `describe_schema` | `GET /api/v1/schema` | sql |
 | `run_sql` | `POST /api/v1/query` with `{ "sql": "...", "params": [] }` | sql |
@@ -128,6 +133,7 @@ These match what Betsy can do in the UI, plus a few guards that matter more for 
 - **Bank-reconciled rows** keep their amount and date. Revert the match in Import first.
 - **Bots delete scheduled items only.** Actual transactions are deleted in the app.
 - **Distributions and period closes are read-only to bots.** They move real cash, so a person records them after the cross-check. Bots can read the quarter engine's recommendation.
+- **Bank rows** post with the Import screen's rules: pending only, legs add up to the cent, direction from the bank sign, category must match that direction. Each post, match, exclude and revert is one database transaction.
 - **Every write is logged** in `mutations_log` in the same SQL statement as the write, with before and after JSON. `/admin` shows the latest 25.
 
 ## Error codes
@@ -161,6 +167,5 @@ The integration suite needs a disposable local Postgres (`PG_TEST_URL` as the ow
 
 ## Not in v1
 
-- Posting bank import rows from a bot. `postBankTxn` is tied to the Clerk session and needs splitting first. Bots can already read the queue with rule suggestions.
 - Wiring the UI's own server actions into `mutations_log`.
 - Recording distributions or closing periods from a bot (by design).
