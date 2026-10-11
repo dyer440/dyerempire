@@ -52,13 +52,15 @@ Content-Type: application/json
 { "kind": "substack" }
 ```
 
-| The bank line | Direction | `kind` |
+| The bank line (`name_raw` starts with) | Direction | `kind` |
 |---|---|---|
-| Payout from Substack | money in | `substack` |
-| Payout from Stripe (thecoaltrader.com) | money in | `website` |
-| Zelle from Seawolf Research or Matt Warder | money in | `ree` |
-| Zelle to Seawolf Research or Matt Warder | money out | `pay_partner` |
-| Transfer to SL Holdings | money out | `pay_owner` |
+| `ELECTRONIC DEPOSIT TheCoalTrader.co` (the Substack payout) | money in | `substack` |
+| `REAL TIME PAYMENT FROM STRIPE` or `REAL TIME PAYMENT FROM SECOND LINE MEDIA LLC` (thecoaltrader.com via Stripe) | money in | `website` |
+| A Zelle from Seawolf Research or Matt Warder | money in | `ree` |
+| `ZELLE INSTANT PMT TO Seawolf Research` or `ZELLE STANDARD PMT TO Seawolf Research` | money out | `pay_partner` |
+| `INTERNET BANKING TRANSFER WITHDRAWAL 4514` (to SL Holdings) | money out | `pay_owner` |
+
+A withdrawal to 4514 that comes back the same day as `INTERNET BANKING TRANSFER DEPOSIT 4514` is a mistake that was reversed. Leave both for Claude.
 
 How to handle the replies:
 - `ok: true`: done. The reply shows the new balances.
