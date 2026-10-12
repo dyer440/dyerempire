@@ -21,6 +21,7 @@
 import sql from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { INCOME_CATEGORIES, EXPENSE_CATEGORIES } from '@/lib/categories'
+import { inferRentPeriod } from '@/lib/rent-period'
 import { OWNER_PERSONAL_METHOD, ensureBookkeeping } from '@/lib/bookkeeping'
 import { lineForCategory } from '@/lib/form8825'
 import { computeQuarter } from '@/lib/distributions'
@@ -324,6 +325,10 @@ export async function createTransaction(input: Input, who: Actor, idempotencyKey
       { matching_forecasts: forecasts })
   }
 
+  // Rent with no stated month: pick the month it is most likely for (early payments).
+  const period = rentalPeriod ?? (propertyId && !isDeposit && type === 'income' && category === 'Rental Income'
+    ? await inferRentPeriod(propertyId, unitId, txnDate, amount) : null)
+
   let newId: number
   try {
     const rows = (await sql`
@@ -333,7 +338,7 @@ export async function createTransaction(input: Input, who: Actor, idempotencyKey
            method, created_by, status, rental_period, is_deposit, transfer_group)
         VALUES
           (${propertyId}, ${rowEntityId}, ${unitId}, ${type}, ${category}, ${amount}, ${txnDate}::date,
-           ${description}, ${method}, ${who.actor}, 'actual', ${rentalPeriod}, ${isDeposit}, ${transferGroup})
+           ${description}, ${method}, ${who.actor}, 'actual', ${period}, ${isDeposit}, ${transferGroup})
         RETURNING *
       ), log AS (
         INSERT INTO mutations_log
@@ -414,7 +419,10 @@ async function buildPatch(row: Row, input: Input, allowed: readonly string[]) {
       throw conflict('bank_reconciled', 'This row is matched to a bank transaction, so its date is fixed. Revert the bank match in Import first.')
     }
   }
-  if (row.property_id) {
+  // Which month a rent payment covers, and its description, are labels for the
+  // rent roll. They don't change any total, so they can be fixed in a closed quarter.
+  const labelsOnly = Object.keys(input).every((k) => ['rental_period', 'description', 'id', 'idempotency_key'].includes(k))
+  if (row.property_id && !labelsOnly) {
     if (await isDateClosed(row.property_id, row.txn_date)) throw closedError(row.txn_date)
     if (txnDate && (await isDateClosed(row.property_id, txnDate))) throw closedError(txnDate)
   }

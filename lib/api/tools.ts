@@ -236,7 +236,7 @@ export const TOOLS: Tool[] = [
       txn_date: date('Date cash moved'),
       description: str('Payee / memo'),
       unit_id: int('Unit, for multi-unit properties'),
-      rental_period: { type: 'string', pattern: '^\\d{4}-\\d{2}$', description: 'Month a rent payment covers (YYYY-MM)' },
+      rental_period: { type: 'string', pattern: '^\\d{4}-\\d{2}$', description: 'Month a rent payment covers (YYYY-MM). Leave it out and rent paid on or after the 24th counts toward next month when this month is already paid in full.' },
       is_deposit: { type: 'boolean' },
       allow_duplicate: { type: 'boolean' },
       paid_from: { type: 'string', enum: ['slcm', 'owner_personal'], description: "owner_personal when it left David's personal account (e.g. a mortgage on autopay). Default slcm" },
@@ -250,8 +250,8 @@ export const TOOLS: Tool[] = [
     name: 'update_transaction',
     title: 'Edit a transaction',
     description:
-      'Change category, amount, txn_date, description, rental_period or unit_id on an existing row. Status and direction ' +
-      'cannot change. Refused for closed periods, and amount/date are fixed on bank-reconciled rows.',
+      'Change category, amount, txn_date, description, rental_period or unit_id on an existing row. rental_period and description can be fixed even in a closed quarter. Status and direction ' +
+      'cannot change. Other edits are refused in closed periods, and amount/date are fixed on bank-reconciled rows.',
     scope: 'write',
     inputSchema: obj({
       id: int('Transaction id'),

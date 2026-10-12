@@ -27,6 +27,7 @@ import { ensureMedia } from '@/lib/media'
 import { badRequest, conflict, notFound, pgCode } from './errors'
 import { type Actor, isDateClosed, closedError, resolveCategory, refreshUi } from './service'
 import { type Input, reqInt, optInt, optString, optBool, optRentalPeriod, optAmount } from './validate'
+import { inferRentPeriod } from '@/lib/rent-period'
 
 type Row = Record<string, unknown>
 const cents = (n: number) => Math.round(Math.abs(n) * 100)
@@ -121,7 +122,9 @@ export async function postBankTxn(input: Input, who: Actor) {
         if (!u[0]) throw badRequest(`${at}: unit ${unitId} does not belong to property ${propertyId}.`)
       }
       if (await isDateClosed(propertyId, bank.txn_date)) throw closedError(bank.txn_date)
-      legs.push({ propertyId, entityId: (p[0].entity_id as number | null) ?? null, unitId, amount, category, description, rentalPeriod, isDeposit })
+      const period = rentalPeriod ?? (!isDeposit && type === 'income' && category === 'Rental Income'
+        ? await inferRentPeriod(propertyId, unitId, bank.txn_date, amount) : null)
+      legs.push({ propertyId, entityId: (p[0].entity_id as number | null) ?? null, unitId, amount, category, description, rentalPeriod: period, isDeposit })
     } else {
       if (unitId) throw badRequest(`${at}: unit_id only applies to property legs.`)
       const e = (await sql`SELECT type FROM entities WHERE id = ${entityId}`) as Row[]

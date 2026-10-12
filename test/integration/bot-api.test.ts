@@ -362,7 +362,7 @@ describe('update / confirm / delete', () => {
   })
   it('refuses edits that touch a closed period', async () => {
     const [row] = await q(`SELECT id FROM transactions WHERE property_id = $1 AND txn_date = '2026-03-10'`, [ids.pA])
-    const r = await call(Txn.PATCH, { method: 'PATCH', params: { id: String(row.id) }, body: { description: 'x' } })
+    const r = await call(Txn.PATCH, { method: 'PATCH', params: { id: String(row.id) }, body: { amount: 1 } })
     expect(r.status).toBe(409)
   })
   it('confirms a forecast with the cleared amount, once', async () => {
@@ -1215,5 +1215,34 @@ describe('management fees and owner funds', () => {
     expect(bel).toMatchObject({ rent_and_other_income: inc, management_fee: fee, sent_to_owners: 0 })
     expect(bel.deposits_held_for_tenants).toBeGreaterThanOrEqual(500)
     expect(bel.held_for_owners).toBe(Math.round((inc - fee - bel.expenses_paid_by_slcm) * 100) / 100)
+  })
+})
+
+describe('rent month for early payments', () => {
+  const lastMonth = ym(monthStart(-1)), thisMonth = ym(monthStart(0))
+  const rent = (txn_date: string, amount: number, extra: Record<string, unknown> = {}) => call(Txns.POST, { method: 'POST', body: {
+    property_id: ids.pB, category: 'Rental Income', amount, txn_date, allow_duplicate: true, ...extra } })
+  const periodOf = async (id: number) => (await q('SELECT rental_period FROM transactions WHERE id = $1', [id]))[0].rental_period
+  it('a payment late in a month whose rent is already in counts toward next month', async () => {
+    const r = await rent(`${lastMonth}-27`, 1350)
+    expect(r.status).toBe(201)
+    expect(await periodOf(r.json.data.id)).toBe(thisMonth)
+  })
+  it('a mid-month payment stays in its month', async () => {
+    expect(await periodOf((await rent(`${lastMonth}-12`, 10)).json.data.id)).toBe(lastMonth)
+  })
+  it('a late payment that covers an unpaid month stays in that month', async () => {
+    expect(await periodOf((await rent('2024-11-28', 1350)).json.data.id)).toBe('2024-11')
+  })
+  it('an explicit rental_period wins', async () => {
+    expect(await periodOf((await rent(`${lastMonth}-28`, 5, { rental_period: lastMonth })).json.data.id)).toBe(lastMonth)
+  })
+  it('the month a payment covers can be relabelled in a closed quarter; amounts cannot', async () => {
+    const [row] = await q(`SELECT id FROM transactions WHERE property_id = $1 AND txn_date BETWEEN '2026-01-01' AND '2026-03-31' AND status = 'actual' AND type = 'income' LIMIT 1`, [ids.pA])
+    const ok = await call(Txn.PATCH, { method: 'PATCH', params: { id: String(row.id) }, body: { rental_period: '2025-12', description: 'Dec rent paid late' } })
+    expect(ok.status).toBe(200)
+    expect(await periodOf(row.id)).toBe('2025-12')
+    const no = await call(Txn.PATCH, { method: 'PATCH', params: { id: String(row.id) }, body: { rental_period: '2026-01', amount: 1 } })
+    expect(no.json.error?.code).toBe('period_closed')
   })
 })
