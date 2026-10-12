@@ -15,6 +15,7 @@
 import sql from '@/lib/db'
 import { listNotes } from '@/lib/notes'
 import { listLeases } from '@/lib/leases'
+import { checkManagementFees } from './mgmt-fees'
 
 // SQL rows are dynamic by nature; columns are typed at the point of use.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -209,6 +210,9 @@ export async function getAttention() {
       state: l.state, monthly_rent: l.monthly_rent, mtm_rent: l.mtm_rent, plan: l.plan,
     })))
 
+  // SLCM management fee pairs: unmatched legs, and finished months with no fee.
+  const mgmtFees = await section(() => checkManagementFees())
+
   const pendingCount =
     pendingBank && typeof pendingBank === 'object' && 'count' in pendingBank ? Number(pendingBank.count) : 0
 
@@ -218,6 +222,7 @@ export async function getAttention() {
       open_notes: count(openNotes),
       late_rent_units: count(lateRent),
       leases_ending_or_month_to_month: count(leases),
+      management_fee_problems: mgmtFees && 'unpaired' in mgmtFees ? mgmtFees.unpaired.length + mgmtFees.missing_months.length : 0,
       late_rent_total: Array.isArray(lateRent) ? Math.round(lateRent.reduce((t, u) => t + u.total_owed, 0) * 100) / 100 : 0,
       rent_without_schedule: count(unscheduled),
       overdue_forecasts: count(overdue),
@@ -231,6 +236,7 @@ export async function getAttention() {
     open_notes: openNotes,
     late_rent: lateRent,
     leases_ending_or_month_to_month: leases,
+    management_fees: mgmtFees,
     rent_without_schedule: unscheduled,
     overdue_forecasts: overdue,
     pending_bank: pendingBank,
@@ -245,6 +251,7 @@ export async function getAttention() {
       overdue_forecasts: 'confirm_forecast if it was paid (check the bank), delete_forecast if it will not happen.',
       schedules_without_forecasts: 'regenerate_forecasts for that property_id / entity_id.',
       leases_ending_or_month_to_month: 'Leases ending within 45 days: David needs to negotiate a renewal or plan the exit. Name each with its end date and plan. Month-to-month ones are fine if intended.',
+      management_fees: 'missing_months: run post_management_fees for that month (reopen a closed quarter first). unpaired: a fee leg was edited or voided alone; re-run post_management_fees for that month.',
       possible_duplicates: 'Report these to David. Bots should report, not delete.',
       open_notes: 'Notes from the website note box. Post what each describes with the normal tools, matching the bank first, then resolve_note with a one-line reply. Ask David about anything ambiguous.',
       rent_gaps: 'Property-level only. Multi-unit properties (Southside) can show a month as paid while one unit is short.',

@@ -47,6 +47,9 @@ import * as MediaPost from '@/app/api/v1/media/bank/[id]/post/route'
 import * as MediaVoid from '@/app/api/v1/media/entries/[kind]/[id]/void/route'
 import * as BankRevertRoute from '@/app/api/v1/bank/[id]/revert/route'
 import * as Leases from '@/app/api/v1/leases/route'
+import * as MgmtFees from '@/app/api/v1/management-fees/route'
+import * as OwnerFunds from '@/app/api/v1/owner-funds/route'
+import { computeQuarter } from '@/lib/distributions'
 import * as LeaseEnd from '@/app/api/v1/leases/[id]/end/route'
 import { addNote } from '@/lib/notes'
 
@@ -105,7 +108,7 @@ beforeAll(async () => {
 
   // Tables created by earlier migrations that aren't in initDb (inferred from usage).
   await q(`
-    CREATE TABLE categories (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT NOT NULL,
+    CREATE TABLE categories (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, form_8825_line TEXT,
                              is_active BOOLEAN DEFAULT TRUE, sort_order INT DEFAULT 0);
     CREATE TABLE bank_accounts (id SERIAL PRIMARY KEY, name TEXT, last4 TEXT);
     CREATE TABLE bank_txns (id SERIAL PRIMARY KEY, account_id INT REFERENCES bank_accounts(id), txn_date DATE,
@@ -431,7 +434,8 @@ describe('maintenance', () => {
     expect(a.unclosed_quarters.properties.map((p: any) => p.property)).toContain('913')
     expect(Array.isArray(a.possible_duplicates)).toBe(true)
     expect(a.possible_duplicates.some((d: any) => d.amount === 61.1 && d.property === '913')).toBe(true)
-    expect(a.overdue_forecasts.length).toBe(0) // the one overdue item was confirmed above
+    // The seeded overdue item was confirmed above. Schedule-generated items can fall due depending on today's date.
+    expect(a.overdue_forecasts.some((f: any) => f.id === ids.overdue)).toBe(false)
     expect(a.schedules_without_forecasts.length).toBe(0) // regenerated above
     for (const v of Object.values(a.summary)) expect(typeof v).toBe('number')
   })
@@ -1129,5 +1133,87 @@ describe('leases', () => {
     expect(u.current_tenant).toBeNull()
     const logs = await q(`SELECT action FROM mutations_log WHERE target_table = 'leases' ORDER BY id`)
     expect(logs.map((l: any) => l.action)).toEqual(['lease.create', 'lease.update', 'lease.create', 'lease.update', 'lease.end'])
+  })
+})
+
+describe('management fees and owner funds', () => {
+  const fees = (body: Record<string, unknown>) => call(MgmtFees.POST, { method: 'POST', body })
+  const y = today.getUTCFullYear()
+  const lastMonth = ym(monthStart(-1))
+  const base = { rent: 0, income: 0 }
+  const fee20 = (x: number) => Math.round(x * 20) / 100
+  it('setup: give the test properties their real slugs and SLCM its slug', async () => {
+    await q(`UPDATE properties SET slug = '913' WHERE id = $1`, [ids.pA])
+    await q(`UPDATE properties SET slug = 'belford' WHERE id = $1`, [ids.pB])
+    await q(`UPDATE entities SET slug = 'second-line-capital-mgmt' WHERE id = $1`, [ids.slcm])
+    // The shared seed already has some Belford rent last month; measure it so the expectations below are relative.
+    base.rent = (await fees({ month: lastMonth, dry_run: true })).json.data.results.find((x: any) => x.property === 'Belford')?.rent_collected ?? 0
+    base.income = (await call(OwnerFunds.GET, { path: `/api/v1/owner-funds?from=${lastMonth}-01&to=${iso(new Date(monthStart(0).getTime() - 86400000))}` }))
+      .json.data.properties.find((p: any) => p.property === 'Belford')?.rent_and_other_income ?? 0
+    // Rent at Belford last month: two payments and a deposit (the deposit is not rent).
+    for (const [amt, dep] of [[1000, false], [350, false], [500, true]] as const) {
+      await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status, is_deposit) VALUES ($1,'income','Rental Income',$2,$3,'actual',$4)`,
+        [ids.pB, amt, `${lastMonth}-05`, dep])
+    }
+  })
+  it('dry run shows the 20% without writing', async () => {
+    const r = await fees({ month: lastMonth, dry_run: true })
+    const bel = r.json.data.results.find((x: any) => x.property === 'Belford')
+    expect(bel).toMatchObject({ rent_collected: base.rent + 1350, fee: fee20(base.rent + 1350), action: 'would_create' })
+    expect(await q(`SELECT 1 FROM transactions WHERE transfer_group LIKE 'mgmtfee-%'`)).toEqual([])
+  })
+  it('posts a property expense and an SLCM income leg sharing one transfer group', async () => {
+    const r = await fees({ month: lastMonth })
+    expect(r.json.data.check.unpaired).toEqual([])
+    const legs = await q(`SELECT property_id, entity_id, type, category, amount::float8 AS amount, method, to_char(txn_date,'YYYY-MM-DD') AS d
+                          FROM transactions WHERE transfer_group = $1 ORDER BY type`, [`mgmtfee-${lastMonth}-belford`])
+    expect(legs).toHaveLength(2)
+    expect(legs[0]).toMatchObject({ property_id: ids.pB, type: 'expense', category: 'Management Fee', amount: fee20(base.rent + 1350), method: 'journal' })
+    expect(legs[1]).toMatchObject({ property_id: null, entity_id: ids.slcm, type: 'income', category: 'Management Fee Income', amount: fee20(base.rent + 1350) })
+    expect(legs[0].d).toBe(legs[1].d)
+    expect(legs[0].d.slice(0, 7)).toBe(lastMonth)
+  })
+  it('re-running is idempotent, and picks up late rent', async () => {
+    expect((await fees({ month: lastMonth })).json.data.changed).toBe(0)
+    await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status) VALUES ($1,'income','Rental Income',100,$2,'actual')`, [ids.pB, `${lastMonth}-20`])
+    const r = await fees({ month: lastMonth })
+    expect(r.json.data.results.find((x: any) => x.property === 'Belford')).toMatchObject({ fee: fee20(base.rent + 1450), action: 'update' })
+    const legs = await q(`SELECT amount::float8 AS a FROM transactions WHERE transfer_group = $1`, [`mgmtfee-${lastMonth}-belford`])
+    expect(legs.map((l: any) => l.a)).toEqual([fee20(base.rent + 1450), fee20(base.rent + 1450)])
+  })
+  it('refuses unfinished months and skips closed quarters', async () => {
+    expect((await fees({ month: ym(monthStart(0)) })).status).toBe(400)
+    const r = await fees({ month: '2026-01', through: '2026-03' })
+    const closed = r.json.data.results.filter((x: any) => x.action === 'skipped_closed')
+    expect(closed.every((x: any) => x.property === '913')).toBe(true)
+    expect(closed.length).toBe(3) // 913 has rent Jan-Mar 2026 and Q1 2026 is closed in the seed
+  })
+  it('the check finds a leg edited on its own', async () => {
+    await q(`UPDATE transactions SET amount = 1 WHERE transfer_group = $1 AND property_id IS NULL`, [`mgmtfee-${lastMonth}-belford`])
+    const bad = await call(Attention.GET)
+    expect(bad.json.data.management_fees.unpaired[0].transfer_group).toBe(`mgmtfee-${lastMonth}-belford`)
+    await fees({ month: lastMonth })
+    expect((await call(Attention.GET)).json.data.management_fees.unpaired).toEqual([])
+  })
+  it('a mortgage paid from the owner account posts to the property but is not SLCM cash', async () => {
+    const before = await computeQuarter(ids.pB, `${y}-Q${Math.floor(today.getUTCMonth() / 3) + 1}`)
+    const r = await call(Txns.POST, { method: 'POST', body: {
+      property_id: ids.pB, category: 'Mortgage Interest', amount: 400, txn_date: daysAgo(1), paid_from: 'owner_personal',
+      transfer_group: 'mtg-test-belford', description: 'Mortgage, interest part' } })
+    expect(r.status).toBe(201)
+    const [row] = await q(`SELECT method, transfer_group FROM transactions WHERE id = $1`, [r.json.data.id])
+    expect(row).toEqual({ method: 'owner personal account', transfer_group: 'mtg-test-belford' })
+    const after = await computeQuarter(ids.pB, `${y}-Q${Math.floor(today.getUTCMonth() / 3) + 1}`)
+    expect(after.retainedCash).toBe(before.retainedCash)
+    const esc = await call(Txns.POST, { method: 'POST', body: { property_id: ids.pB, category: 'Escrow Funding', amount: 200, txn_date: daysAgo(1), paid_from: 'owner_personal' } })
+    expect(esc.status).toBe(201)
+  })
+  it('owner funds: rent less fee, less SLCM-paid expenses, less cash sent; owner-paid rows excluded', async () => {
+    const r = await call(OwnerFunds.GET, { path: `/api/v1/owner-funds?from=${lastMonth}-01&to=${iso(new Date(monthStart(0).getTime() - 86400000))}` })
+    const bel = r.json.data.properties.find((p: any) => p.property === 'Belford')
+    const inc = base.income + 1450, fee = fee20(base.rent + 1450)
+    expect(bel).toMatchObject({ rent_and_other_income: inc, management_fee: fee, sent_to_owners: 0 })
+    expect(bel.deposits_held_for_tenants).toBeGreaterThanOrEqual(500)
+    expect(bel.held_for_owners).toBe(Math.round((inc - fee - bel.expenses_paid_by_slcm) * 100) / 100)
   })
 })

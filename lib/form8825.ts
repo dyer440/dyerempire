@@ -33,7 +33,10 @@ export const FORM_8825_LINES: Form8825Line[] = [
 //   Loan Principal:   repaying debt is real cash out (so cash views, retained cash
 //                     and distributions still count it) but it is not deductible;
 //                     only the interest leg (Mortgage Interest) reaches the return.
-export const NON_PL_CATEGORIES = new Set(['Security Deposit', 'Loan Principal'])
+// Escrow Funding: the monthly escrow part of a mortgage payment. The deduction is the
+// lender's disbursement to the county or insurer, posted separately as Property Taxes or
+// Insurance. Owner Distribution: an owner's personal spending paid by an entity.
+export const NON_PL_CATEGORIES = new Set(['Security Deposit', 'Loan Principal', 'Escrow Funding', 'Owner Distribution'])
 
 // Build a category → line label lookup, and surface any category not yet mapped
 // so it can't be silently dropped from the rollup.

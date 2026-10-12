@@ -108,10 +108,15 @@ The server accepts the key with or without the `Bearer ` prefix, so either form 
 | `close_period` | `POST /api/v1/properties/{id}/quarters/{period}/close` | write |
 | `reopen_period` | `POST /api/v1/properties/{id}/quarters/{period}/reopen` | write |
 | `regenerate_forecasts` | `POST /api/v1/forecasts/regenerate` | write |
+| `post_management_fees` | `POST /api/v1/management-fees` with `{ "month": "2026-09", "through"?, "dry_run"? }` | write |
+| `check_management_fees` | `GET /api/v1/management-fees/check?year=2026` | read |
+| `get_owner_funds` | `GET /api/v1/owner-funds?from=&to=` | read |
 | `describe_schema` | `GET /api/v1/schema` | sql |
 | `run_sql` | `POST /api/v1/query` with `{ "sql": "...", "params": [] }` | sql |
 
 `GET /api/v1` with a key returns the list available to that key.
+
+Bookkeeping method (from October 2026). SLCM charges each of 524, 6th St, Belford and 913 a fee of 20% of rent collected. `post_management_fees` writes it monthly as a pair dated month end: a `Management Fee` expense on the property and a `Management Fee Income` row on SLCM, sharing `transfer_group` `mgmtfee-YYYY-MM-<slug>`, method `journal`. Re-running replaces the pair, so late rent is picked up. These rows are never matched to the bank. A mortgage or escrow payment made from the owners' personal account is posted with `create_transaction` and `paid_from: "owner_personal"`. It counts on the property's books but not as SLCM cash. `get_owner_funds` reports rent less fee, less expenses SLCM paid, less distributions sent, which is what SLCM is holding for the owners.
 
 ### REST examples
 

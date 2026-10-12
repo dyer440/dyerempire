@@ -16,6 +16,7 @@ import { describeSchema } from './schema'
 import { listBookNotes, resolveBookNote } from './notes'
 import { voidTransaction } from './void'
 import { listLeasesApi, upsertLease, endLease } from './leases'
+import { postManagementFees, getOwnerFunds, checkManagementFees } from './mgmt-fees'
 import { getMediaLedger, postMediaBankTxn, recordMediaEntries, voidMediaEntry, updateMediaEntries } from './media'
 import { runReadOnlySql } from './sql-runner'
 import { badRequest } from './errors'
@@ -238,6 +239,8 @@ export const TOOLS: Tool[] = [
       rental_period: { type: 'string', pattern: '^\\d{4}-\\d{2}$', description: 'Month a rent payment covers (YYYY-MM)' },
       is_deposit: { type: 'boolean' },
       allow_duplicate: { type: 'boolean' },
+      paid_from: { type: 'string', enum: ['slcm', 'owner_personal'], description: "owner_personal when it left David's personal account (e.g. a mortgage on autopay). Default slcm" },
+      transfer_group: str('Ties rows that are one payment, e.g. mtg-2026-09-belford for the interest, principal and escrow parts'),
       idempotency_key: str('Unique per intended write, e.g. grok-2026-10-10-524-rent'),
     }, ['amount', 'txn_date']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -641,6 +644,45 @@ export const TOOLS: Tool[] = [
     inputSchema: obj({ lease_id: int('Lease id'), ended_on: date('Last day'), unit_vacant: { type: 'boolean' } }, ['lease_id']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     run: (a, who) => endLease(a, who),
+  },
+  {
+    name: 'post_management_fees',
+    title: 'Post SLCM management fees',
+    description:
+      "SLCM's 20% fee on rent actually collected in a month (by payment date) at 524, 6th St, Belford and 913. Posts a pair " +
+      "per property: the property's Management Fee expense and SLCM's Management Fee Income, sharing transfer_group " +
+      "mgmtfee-YYYY-MM-<slug>. Re-running a month corrects the pair if rent changed. No cash moves, so never match these to " +
+      'the bank. Closed quarters are skipped and reported: reopen, run again, close. Use dry_run first to see the amounts. ' +
+      'Run monthly, after the month\'s rent is posted.',
+    scope: 'write',
+    inputSchema: obj({
+      month: { type: 'string', pattern: '^\\d{4}-\\d{2}$', description: 'First month, YYYY-MM' },
+      through: { type: 'string', pattern: '^\\d{4}-\\d{2}$', description: 'Last month, for a range' },
+      dry_run: { type: 'boolean' },
+    }, ['month']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: (a, who) => postManagementFees(a, who),
+  },
+  {
+    name: 'check_management_fees',
+    title: 'Check management fee pairs',
+    description: 'Lists fee pairs whose two legs disagree or are incomplete, and finished months this year with rent collected but no fee posted. Both lists should be empty.',
+    scope: 'read',
+    inputSchema: obj({}),
+    annotations: READ,
+    run: () => checkManagementFees(),
+  },
+  {
+    name: 'get_owner_funds',
+    title: 'Owner funds held by SLCM',
+    description:
+      'For 524, 6th St, Belford and 913: rent collected minus the management fee, minus property expenses SLCM paid, ' +
+      'minus cash sent to the owners, which is what SLCM is holding for the owners. Deposits held for tenants are shown ' +
+      "separately. Rows paid from the owner's personal account are excluded. from defaults to Jan 1 this year, opening balance zero.",
+    scope: 'read',
+    inputSchema: obj({ from: date('Start'), to: date('End, default today') }),
+    annotations: READ,
+    run: (a) => getOwnerFunds(a),
   },
 ]
 

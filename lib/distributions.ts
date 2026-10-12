@@ -69,6 +69,7 @@ export async function computeQuarter(propertyId: number, period: string): Promis
       AND (status = 'actual' OR (status = 'forecast' AND txn_date >= date_trunc('month', CURRENT_DATE)))
       AND txn_date BETWEEN ${start} AND ${end}
       AND COALESCE(is_deposit, FALSE) = FALSE
+      AND COALESCE(method, '') <> 'owner personal account' -- paid from David's own account, not SLCM-held cash
     GROUP BY type, category
   `) as { type: string; category: string; total: number }[]
 
@@ -89,6 +90,7 @@ export async function computeQuarter(propertyId: number, period: string): Promis
       AND status = 'forecast' AND txn_date >= date_trunc('month', CURRENT_DATE)
       AND txn_date BETWEEN ${start} AND ${end}
       AND COALESCE(is_deposit, FALSE) = FALSE
+      AND COALESCE(method, '') <> 'owner personal account' -- paid from David's own account, not SLCM-held cash
     GROUP BY type
   `) as { type: string; total: number }[]
   let scheduledNet = 0
@@ -133,6 +135,7 @@ export async function computeQuarter(propertyId: number, period: string): Promis
     FROM transactions WHERE property_id = ${propertyId} AND status = 'actual'
       AND txn_date BETWEEN ${yearStart} AND ${end}
       AND COALESCE(is_deposit, FALSE) = FALSE
+      AND COALESCE(method, '') <> 'owner personal account' -- paid from David's own account, not SLCM-held cash
     GROUP BY type
   `) as { type: string; total: number }[]
   let cumIncome = 0, cumExpenseAll = 0
@@ -165,6 +168,7 @@ export async function computeQuarter(propertyId: number, period: string): Promis
         AND (status = 'actual' OR status = 'forecast')
         AND txn_date > ${end} AND txn_date <= ${nextReserveBillDate}
         AND COALESCE(is_deposit, FALSE) = FALSE
+      AND COALESCE(method, '') <> 'owner personal account' -- paid from David's own account, not SLCM-held cash
       GROUP BY type, category
     `) as { type: string; category: string; total: number }[]
     let fi = 0, fe = 0
@@ -183,6 +187,7 @@ export async function computeQuarter(propertyId: number, period: string): Promis
     SELECT COALESCE(SUM(amount), 0)::float8 AS total
     FROM transactions WHERE property_id = ${propertyId} AND status = 'actual'
       AND category IN ('Property Taxes', 'Insurance') AND txn_date BETWEEN ${yearStart} AND ${end}
+      AND COALESCE(method, '') <> 'owner personal account'
   `) as { total: number }[]
   const reservedPaidYtd = paidRows[0]?.total || 0
   const reserveAccrued = q * reserveTargetQuarter
@@ -229,6 +234,7 @@ export async function lifetimeRetained(propertyId: number): Promise<{
     FROM transactions
     WHERE property_id = ${propertyId} AND status = 'actual'
       AND COALESCE(is_deposit, FALSE) = FALSE
+      AND COALESCE(method, '') <> 'owner personal account' -- paid from David's own account, not SLCM-held cash
   `) as { net: number }[]
   const distRows = (await sql`
     SELECT COALESCE(SUM(amount), 0)::float8 AS total

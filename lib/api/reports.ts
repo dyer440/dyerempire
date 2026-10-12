@@ -113,7 +113,7 @@ export async function getPnl(input: Input) {
     let income = 0
     for (const r of rows) {
       if (r.type === 'income') { income += r.total; continue }
-      const line = lineForCategory(r.category) ?? '(not deductible: loan principal, deposits)'
+      const line = lineForCategory(r.category) ?? '(not deductible: loan principal, escrow funding, owner distributions, deposits)'
       const cur = lines.get(line) || { line, categories: new Set<string>(), total: 0 }
       cur.categories.add(r.category)
       cur.total += r.total

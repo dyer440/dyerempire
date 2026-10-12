@@ -21,6 +21,7 @@
 import sql from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { INCOME_CATEGORIES, EXPENSE_CATEGORIES } from '@/lib/categories'
+import { OWNER_PERSONAL_METHOD, ensureBookkeeping } from '@/lib/bookkeeping'
 import { lineForCategory } from '@/lib/form8825'
 import { computeQuarter } from '@/lib/distributions'
 import { computeCapitalAccounts } from '@/lib/capital'
@@ -58,6 +59,7 @@ export function closedError(date: string) {
 
 /** Category name → kind, from the categories table (falls back to lib/categories). */
 async function categoryKinds(): Promise<Map<string, 'income' | 'expense'>> {
+  await ensureBookkeeping().catch(() => {})
   const map = new Map<string, 'income' | 'expense'>()
   try {
     const rows = (await sql`
@@ -77,6 +79,11 @@ async function categoryKinds(): Promise<Map<string, 'income' | 'expense'>> {
   if (!map.has('Subscription Revenue')) map.set('Subscription Revenue', 'income')
   if (!map.has('Royalty Income')) map.set('Royalty Income', 'income')
   if (!map.has('Licensing Fees')) map.set('Licensing Fees', 'expense')
+  // Bookkeeping method of Oct 2026 (lib/bookkeeping.ts).
+  if (!map.has('Management Fee Income')) map.set('Management Fee Income', 'income')
+  if (!map.has('Escrow Funding')) map.set('Escrow Funding', 'expense')
+  if (!map.has('Owner Distribution')) map.set('Owner Distribution', 'expense')
+  if (!map.has('Payroll Taxes')) map.set('Payroll Taxes', 'expense')
   return map
 }
 
@@ -242,6 +249,12 @@ export async function createTransaction(input: Input, who: Actor, idempotencyKey
   const unitId = optInt(input, 'unit_id')
   const requestedType = optEnum(input, 'type', ['income', 'expense'] as const)
   const rawCategory = optString(input, 'category', 100)
+  // Who paid: SLCM's account (default) or the owner's personal account (e.g. a
+  // mortgage on autopay from David's checking). Personal-account rows still post
+  // to the property book for tax, but they are not cash SLCM holds.
+  const paidFrom = optEnum(input, 'paid_from', ['slcm', 'owner_personal'] as const) ?? 'slcm'
+  const method = paidFrom === 'owner_personal' ? OWNER_PERSONAL_METHOD : 'api'
+  const transferGroup = optString(input, 'transfer_group', 100)
 
   let type: 'income' | 'expense'
   let category: string
@@ -317,10 +330,10 @@ export async function createTransaction(input: Input, who: Actor, idempotencyKey
       WITH ins AS (
         INSERT INTO transactions
           (property_id, entity_id, unit_id, type, category, amount, txn_date, description,
-           method, created_by, status, rental_period, is_deposit)
+           method, created_by, status, rental_period, is_deposit, transfer_group)
         VALUES
           (${propertyId}, ${rowEntityId}, ${unitId}, ${type}, ${category}, ${amount}, ${txnDate}::date,
-           ${description}, 'api', ${who.actor}, 'actual', ${rentalPeriod}, ${isDeposit})
+           ${description}, ${method}, ${who.actor}, 'actual', ${rentalPeriod}, ${isDeposit}, ${transferGroup})
         RETURNING *
       ), log AS (
         INSERT INTO mutations_log
