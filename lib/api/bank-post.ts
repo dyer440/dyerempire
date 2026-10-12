@@ -211,7 +211,10 @@ export async function matchBankTxn(input: Input, who: Actor) {
         upd AS (
           UPDATE transactions
           SET status = 'actual', method = 'import', created_by = ${who.actor},
-              amount = ${amount}, txn_date = ${bank.txn_date}::date
+              amount = ${amount}, txn_date = ${bank.txn_date}::date,
+              -- A scheduled rent item stands for the month it was due, even if paid early or late.
+              rental_period = CASE WHEN type = 'income' AND category ILIKE '%rent%' AND NOT COALESCE(is_deposit, FALSE)
+                                   THEN COALESCE(rental_period, to_char(txn_date, 'YYYY-MM')) ELSE rental_period END
           WHERE id = ${f.id}
           RETURNING *
         )

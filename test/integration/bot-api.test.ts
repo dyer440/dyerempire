@@ -368,7 +368,7 @@ describe('update / confirm / delete', () => {
   it('confirms a forecast with the cleared amount, once', async () => {
     const r = await call(Confirm.POST, { method: 'POST', params: { id: String(ids.overdue) }, body: { amount: 674.62, txn_date: daysAgo(19) } })
     expect(r.status).toBe(200)
-    expect(r.json.data).toMatchObject({ status: 'actual', method: 'confirmed', created_by: 'bot:TestBot' })
+    expect(r.json.data).toMatchObject({ status: 'actual', method: 'confirmed', created_by: 'bot:TestBot', rental_period: null }) // insurance: no rent month
     const again = await call(Confirm.POST, { method: 'POST', params: { id: String(ids.overdue) }, body: {} })
     expect(again.status).toBe(409)
   })
@@ -1236,6 +1236,12 @@ describe('rent month for early payments', () => {
   })
   it('an explicit rental_period wins', async () => {
     expect(await periodOf((await rent(`${lastMonth}-28`, 5, { rental_period: lastMonth })).json.data.id)).toBe(lastMonth)
+  })
+  it('a scheduled rent item paid early keeps the month it was due', async () => {
+    const next = ym(monthStart(1))
+    const [f] = await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status) VALUES ($1,'income','Rental Income',1350,$2,'forecast') RETURNING id`, [ids.pB, `${next}-01`])
+    const r = await call(Confirm.POST, { method: 'POST', params: { id: String(f.id) }, body: { txn_date: daysAgo(0) } })
+    expect(r.json.data).toMatchObject({ status: 'actual', rental_period: next })
   })
   it('the month a payment covers can be relabelled in a closed quarter; amounts cannot', async () => {
     const [row] = await q(`SELECT id FROM transactions WHERE property_id = $1 AND txn_date BETWEEN '2026-01-01' AND '2026-03-31' AND status = 'actual' AND type = 'income' LIMIT 1`, [ids.pA])

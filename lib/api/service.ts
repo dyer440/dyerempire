@@ -474,7 +474,12 @@ export async function confirmForecast(id: number, input: Input, who: Actor) {
         category    = COALESCE(${p.category}::text, category),
         amount      = COALESCE(${p.amount}::numeric, amount),
         txn_date    = COALESCE(${p.txnDate}::date, txn_date),
-        description = CASE WHEN ${p.descSet}::boolean THEN ${p.description}::text ELSE description END
+        description = CASE WHEN ${p.descSet}::boolean THEN ${p.description}::text ELSE description END,
+        -- A scheduled rent item stands for the month it was due, even if paid early or late.
+        rental_period = CASE WHEN ${p.rpSet}::boolean THEN ${p.rentalPeriod}::text
+                             WHEN type = 'income' AND category ILIKE '%rent%' AND NOT COALESCE(is_deposit, FALSE)
+                               THEN COALESCE(rental_period, to_char(txn_date, 'YYYY-MM'))
+                             ELSE rental_period END
       WHERE id = ${id} AND status = 'forecast'
       RETURNING *
     )
