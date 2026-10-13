@@ -1252,3 +1252,30 @@ describe('rent month for early payments', () => {
     expect(no.json.error?.code).toBe('period_closed')
   })
 })
+
+describe('owner draws and moving rows between books', () => {
+  it('moves a personal item from SLCM to a property as an owner draw, and owner funds counts it as sent', async () => {
+    const lastMonth = ym(monthStart(-1))
+    const to = iso(new Date(monthStart(0).getTime() - 86400000))
+    const before = (await call(OwnerFunds.GET, { path: `/api/v1/owner-funds?from=${lastMonth}-01&to=${to}` })).json.data
+    const bel0 = before.properties.find((p: any) => p.property === 'Belford')
+    const c = await call(Txns.POST, { method: 'POST', body: { entity_id: ids.slcm, category: 'Utilities', amount: 77, txn_date: `${lastMonth}-09`, description: 'Venmo personal' } })
+    expect(c.status).toBe(201)
+    const m = await call(Txn.PATCH, { method: 'PATCH', params: { id: String(c.json.data.id) }, body: { property_id: ids.pB, category: 'Owner Distribution' } })
+    expect(m.status).toBe(200)
+    expect(m.json.data).toMatchObject({ property_id: ids.pB, category: 'Owner Distribution' })
+    const bel1 = (await call(OwnerFunds.GET, { path: `/api/v1/owner-funds?from=${lastMonth}-01&to=${to}` })).json.data.properties.find((p: any) => p.property === 'Belford')
+    expect(bel1.sent_to_owners).toBe(bel0.sent_to_owners + 77)
+    expect(bel1.expenses_paid_by_slcm).toBe(bel0.expenses_paid_by_slcm)
+    expect(bel1.held_for_owners).toBe(Math.round((bel0.held_for_owners - 77) * 100) / 100)
+    // Owner funds lists every property, fee-paying or not.
+    expect(before.properties.length).toBe((await q('SELECT COUNT(*)::int AS n FROM properties'))[0].n)
+  })
+  it('refuses a move into a closed quarter or onto a property entity', async () => {
+    const c = await call(Txns.POST, { method: 'POST', body: { entity_id: ids.slcm, category: 'Utilities', amount: 5, txn_date: '2026-02-10' } })
+    const closed = await call(Txn.PATCH, { method: 'PATCH', params: { id: String(c.json.data.id) }, body: { property_id: ids.pA } })
+    expect(closed.json.error?.code).toBe('period_closed')
+    const both = await call(Txn.PATCH, { method: 'PATCH', params: { id: String(c.json.data.id) }, body: { property_id: ids.pB, entity_id: ids.slcm } })
+    expect(both.status).toBe(400)
+  })
+})

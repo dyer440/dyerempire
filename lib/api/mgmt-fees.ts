@@ -186,20 +186,25 @@ export async function getOwnerFunds(input: Input) {
   const from = optDate(input, 'from') ?? `${new Date().getFullYear()}-01-01`
   const to = optDate(input, 'to') ?? new Date().toISOString().slice(0, 10)
   if (to < from) throw badRequest('to is before from.')
-  const props = await feeProperties()
+  // Every property whose rent SLCM collects, fee-paying or not (1219 and 500 West pay no fee
+  // and have a third-party partner, so their balances are not David's alone).
+  const feeIds = new Set((await feeProperties()).map((p) => p.id))
+  const props = (await sql`SELECT id, slug, name FROM properties ORDER BY name`) as { id: number; slug: string; name: string }[]
   const rows = (await sql`
     SELECT t.property_id,
       COALESCE(SUM(t.amount) FILTER (WHERE t.type = 'income' AND NOT COALESCE(t.is_deposit, FALSE)), 0)::float8 AS income,
       COALESCE(SUM(t.amount) FILTER (WHERE t.type = 'expense' AND t.category = 'Management Fee' AND t.transfer_group LIKE 'mgmtfee-%'), 0)::float8 AS fee,
       COALESCE(SUM(t.amount) FILTER (WHERE t.type = 'expense' AND NOT COALESCE(t.is_deposit, FALSE)
+                                     AND t.category <> 'Owner Distribution'
                                      AND NOT (t.category = 'Management Fee' AND t.transfer_group LIKE 'mgmtfee-%')), 0)::float8 AS expenses,
+      COALESCE(SUM(t.amount) FILTER (WHERE t.type = 'expense' AND t.category = 'Owner Distribution'), 0)::float8 AS draws,
       COALESCE(SUM(CASE WHEN t.type = 'income' THEN t.amount ELSE -t.amount END) FILTER (WHERE COALESCE(t.is_deposit, FALSE)), 0)::float8 AS deposits
     FROM transactions t
     WHERE t.property_id = ANY(${props.map((p) => p.id)}::int[]) AND t.status = 'actual'
       AND t.txn_date BETWEEN ${from}::date AND ${to}::date
       AND COALESCE(t.method, '') <> ${OWNER_PERSONAL_METHOD}
     GROUP BY t.property_id
-  `) as { property_id: number; income: number; fee: number; expenses: number; deposits: number }[]
+  `) as { property_id: number; income: number; fee: number; expenses: number; draws: number; deposits: number }[]
   const dist = (await sql`
     SELECT property_id, COALESCE(SUM(amount), 0)::float8 AS paid FROM distributions
     WHERE property_id = ANY(${props.map((p) => p.id)}::int[]) AND distributed_on BETWEEN ${from}::date AND ${to}::date
@@ -207,11 +212,12 @@ export async function getOwnerFunds(input: Input) {
   `) as { property_id: number; paid: number }[]
   const r2 = (n: number) => Math.round(n * 100) / 100
   const properties = props.map((p) => {
-    const r = rows.find((x) => x.property_id === p.id) ?? { income: 0, fee: 0, expenses: 0, deposits: 0 }
-    const sent = dist.find((d) => d.property_id === p.id)?.paid ?? 0
+    const r = rows.find((x) => x.property_id === p.id) ?? { income: 0, fee: 0, expenses: 0, draws: 0, deposits: 0 }
+    // Cash to owners: recorded distributions, plus owner draws posted as Owner Distribution rows.
+    const sent = (dist.find((d) => d.property_id === p.id)?.paid ?? 0) + r.draws
     const held = r2(r.income - r.fee - r.expenses - sent)
     return {
-      property: p.name, rent_and_other_income: r2(r.income), management_fee: r2(r.fee),
+      property: p.name, pays_management_fee: feeIds.has(p.id), rent_and_other_income: r2(r.income), management_fee: r2(r.fee),
       expenses_paid_by_slcm: r2(r.expenses), sent_to_owners: r2(sent), held_for_owners: held,
       deposits_held_for_tenants: r2(r.deposits),
       flag: held < 0 ? 'Negative: SLCM has paid out more than it collected. Either a posting error, or SLCM is funding the property, which needs recording as such.' : null,

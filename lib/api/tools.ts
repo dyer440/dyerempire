@@ -250,7 +250,9 @@ export const TOOLS: Tool[] = [
     name: 'update_transaction',
     title: 'Edit a transaction',
     description:
-      'Change category, amount, txn_date, description, rental_period or unit_id on an existing row. rental_period and description can be fixed even in a closed quarter. Status and direction ' +
+      'Change category, amount, txn_date, description, rental_period or unit_id on an existing row, or move it to other books with ' +
+      'property_id or entity_id (e.g. a personal item paid from SLCM that is really an owner draw from a property\'s rent). ' +
+      'rental_period and description can be fixed even in a closed quarter. Status and direction ' +
       'cannot change. Other edits are refused in closed periods, and amount/date are fixed on bank-reconciled rows.',
     scope: 'write',
     inputSchema: obj({
@@ -261,6 +263,8 @@ export const TOOLS: Tool[] = [
       description: { type: ['string', 'null'] },
       rental_period: { type: ['string', 'null'], pattern: '^\\d{4}-\\d{2}$' },
       unit_id: { type: ['integer', 'null'] },
+      property_id: int('Move the row to this property\'s books'),
+      entity_id: int('Move the row to this entity\'s own books'),
     }, ['id']),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     run: (a, who) => svc.updateTransaction(needId(a), withoutId(a), who),
@@ -676,8 +680,9 @@ export const TOOLS: Tool[] = [
     name: 'get_owner_funds',
     title: 'Owner funds held by SLCM',
     description:
-      'For 524, 6th St, Belford and 913: rent collected minus the management fee, minus property expenses SLCM paid, ' +
-      'minus cash sent to the owners, which is what SLCM is holding for the owners. Deposits held for tenants are shown ' +
+      'For every property whose rent SLCM collects: rent minus the management fee (524, 6th St, Belford, 913 only), minus property ' +
+      'expenses SLCM paid, minus cash sent to the owners (recorded distributions plus Owner Distribution rows on the property), ' +
+      'which is what SLCM is holding for the owners. 913, 1219 and 500 West have other owners. Deposits held for tenants are shown ' +
       "separately. Rows paid from the owner's personal account are excluded. from defaults to Jan 1 this year, opening balance zero.",
     scope: 'read',
     inputSchema: obj({ from: date('Start'), to: date('End, default today') }),

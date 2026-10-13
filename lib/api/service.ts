@@ -362,7 +362,7 @@ export async function createTransaction(input: Input, who: Actor, idempotencyKey
   return near.length ? { ...created, nearby_similar: near } : created
 }
 
-const EDITABLE = ['category', 'amount', 'txn_date', 'description', 'rental_period', 'unit_id'] as const
+const EDITABLE = ['category', 'amount', 'txn_date', 'description', 'rental_period', 'unit_id', 'property_id', 'entity_id'] as const
 
 async function loadForEdit(id: number) {
   const rows = (await sql`
@@ -405,10 +405,29 @@ async function buildPatch(row: Row, input: Input, allowed: readonly string[]) {
   if (rentalPeriod && row.type !== 'income') throw badRequest('rental_period only applies to income.')
   const unitSet = provided('unit_id')
   const unitId = unitSet ? optInt(input, 'unit_id') : null
+  // Moving a row to other books: a misposting, or an owner draw taken from rent SLCM holds.
+  let move: { propertyId: number | null; entityId: number } | null = null
+  if (provided('property_id') || provided('entity_id')) {
+    const toProp = optInt(input, 'property_id'), toEnt = optInt(input, 'entity_id')
+    if (!!toProp === !!toEnt) throw badRequest('To move a row send exactly one of property_id or entity_id.')
+    if (row.is_deposit) throw conflict('deposit_row', 'Deposit rows stay on their property.')
+    if (toProp) {
+      const pr = (await sql`SELECT entity_id FROM properties WHERE id = ${toProp}`) as Row[]
+      if (!pr[0]) throw notFound(`Property ${toProp} not found.`)
+      if (await isDateClosed(toProp, txnDate ?? row.txn_date)) throw closedError(txnDate ?? row.txn_date)
+      move = { propertyId: toProp, entityId: pr[0].entity_id as number }
+    } else {
+      const e = (await sql`SELECT type FROM entities WHERE id = ${toEnt}`) as Row[]
+      if (!e[0]) throw notFound(`Entity ${toEnt} not found.`)
+      if (e[0].type === 'property') throw badRequest('That entity is a property. Move to its property_id instead.')
+      move = { propertyId: null, entityId: toEnt! }
+    }
+  }
+  const targetProp = move ? move.propertyId : row.property_id
   if (unitSet && unitId !== null) {
-    if (!row.property_id) throw badRequest('unit_id only applies to property transactions.')
-    const u = (await sql`SELECT 1 FROM units WHERE id = ${unitId} AND property_id = ${row.property_id}`) as Row[]
-    if (!u[0]) throw badRequest(`Unit ${unitId} does not belong to property ${row.property_id}.`)
+    if (!targetProp) throw badRequest('unit_id only applies to property transactions.')
+    const u = (await sql`SELECT 1 FROM units WHERE id = ${unitId} AND property_id = ${targetProp}`) as Row[]
+    if (!u[0]) throw badRequest(`Unit ${unitId} does not belong to property ${targetProp}.`)
   }
 
   if (row.bank_linked) {
@@ -426,7 +445,7 @@ async function buildPatch(row: Row, input: Input, allowed: readonly string[]) {
     if (await isDateClosed(row.property_id, row.txn_date)) throw closedError(row.txn_date)
     if (txnDate && (await isDateClosed(row.property_id, txnDate))) throw closedError(txnDate)
   }
-  return { category, amount, txnDate, descSet, description, rpSet, rentalPeriod, unitSet, unitId }
+  return { category, amount, txnDate, descSet, description, rpSet, rentalPeriod, unitSet, unitId, move }
 }
 
 export async function updateTransaction(id: number, input: Input, who: Actor) {
@@ -444,7 +463,10 @@ export async function updateTransaction(id: number, input: Input, who: Actor) {
         txn_date      = COALESCE(${p.txnDate}::date, txn_date),
         description   = CASE WHEN ${p.descSet}::boolean THEN ${p.description}::text ELSE description END,
         rental_period = CASE WHEN ${p.rpSet}::boolean THEN ${p.rentalPeriod}::text ELSE rental_period END,
-        unit_id       = CASE WHEN ${p.unitSet}::boolean THEN ${p.unitId}::int ELSE unit_id END
+        unit_id       = CASE WHEN ${p.unitSet}::boolean THEN ${p.unitId}::int
+                             WHEN ${!!p.move}::boolean THEN NULL ELSE unit_id END,
+        property_id   = CASE WHEN ${!!p.move}::boolean THEN ${p.move?.propertyId ?? null}::int ELSE property_id END,
+        entity_id     = CASE WHEN ${!!p.move}::boolean THEN ${p.move?.entityId ?? null}::int ELSE entity_id END
       WHERE id = ${id}
       RETURNING *
     )
