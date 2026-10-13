@@ -1281,3 +1281,18 @@ describe('owner draws and moving rows between books', () => {
     expect(both.status).toBe(400)
   })
 })
+
+describe('flagging a deposit refund after the fact', () => {
+  it('turns a Security Deposit expense into deposit activity, out of P&L', async () => {
+    const lastMonth = ym(monthStart(-1))
+    const [r] = await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status) VALUES ($1,'expense','Security Deposit',2500,$2,'actual') RETURNING id`, [ids.pB, `${lastMonth}-09`])
+    const pnl = async () => (await call(Pnl.GET, { path: `/api/v1/pnl?property_id=${ids.pB}&from=${lastMonth}-01&to=${lastMonth}-28` })).json.data.totals.expense
+    const before = await pnl()
+    const ok = await call(Txn.PATCH, { method: 'PATCH', params: { id: String(r.id) }, body: { is_deposit: true } })
+    expect(ok.status).toBe(200)
+    expect(ok.json.data.is_deposit).toBe(true)
+    expect(await pnl()).toBe(Math.round((before - 2500) * 100) / 100)
+    const [u] = await q(`INSERT INTO transactions (property_id, type, category, amount, txn_date, status) VALUES ($1,'expense','Utilities',50,$2,'actual') RETURNING id`, [ids.pB, `${lastMonth}-09`])
+    expect((await call(Txn.PATCH, { method: 'PATCH', params: { id: String(u.id) }, body: { is_deposit: true } })).status).toBe(400)
+  })
+})

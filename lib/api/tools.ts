@@ -265,6 +265,7 @@ export const TOOLS: Tool[] = [
       unit_id: { type: ['integer', 'null'] },
       property_id: int('Move the row to this property\'s books'),
       entity_id: int('Move the row to this entity\'s own books'),
+      is_deposit: { type: 'boolean', description: 'Mark as security deposit activity (kept out of P&L): a refund is expense under Security Deposit, a deposit collected is income under Rental Income' },
     }, ['id']),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     run: (a, who) => svc.updateTransaction(needId(a), withoutId(a), who),

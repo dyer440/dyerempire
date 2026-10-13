@@ -362,7 +362,7 @@ export async function createTransaction(input: Input, who: Actor, idempotencyKey
   return near.length ? { ...created, nearby_similar: near } : created
 }
 
-const EDITABLE = ['category', 'amount', 'txn_date', 'description', 'rental_period', 'unit_id', 'property_id', 'entity_id'] as const
+const EDITABLE = ['category', 'amount', 'txn_date', 'description', 'rental_period', 'unit_id', 'property_id', 'entity_id', 'is_deposit'] as const
 
 async function loadForEdit(id: number) {
   const rows = (await sql`
@@ -386,7 +386,7 @@ async function buildPatch(row: Row, input: Input, allowed: readonly string[]) {
 
   let category: string | null = null
   if (provided('category')) {
-    if (row.is_deposit) throw conflict('deposit_row', 'Deposit rows keep their category. Edit deposits in the app.')
+    if (row.is_deposit && !provided('is_deposit')) throw conflict('deposit_row', 'Deposit rows keep their category. Edit deposits in the app.')
     const raw = optString(input, 'category', 100)
     if (!raw) throw badRequest('category cannot be blank.')
     const c = await resolveCategory(raw)
@@ -405,6 +405,18 @@ async function buildPatch(row: Row, input: Input, allowed: readonly string[]) {
   if (rentalPeriod && row.type !== 'income') throw badRequest('rental_period only applies to income.')
   const unitSet = provided('unit_id')
   const unitId = unitSet ? optInt(input, 'unit_id') : null
+  // Flag (or unflag) a row as security deposit activity, which keeps it out of P&L.
+  // Same shape as create: collected = income Rental Income, returned = expense Security Deposit.
+  let isDeposit: boolean | null = null
+  if (provided('is_deposit')) {
+    isDeposit = optBool(input, 'is_deposit')
+    if (isDeposit === null) throw badRequest('is_deposit must be true or false.')
+    const cat = category ?? (row.category as string)
+    if (isDeposit && !row.property_id) throw badRequest('Security deposits belong to a property.')
+    if (isDeposit && !((row.type === 'income' && cat === 'Rental Income') || (row.type === 'expense' && cat === 'Security Deposit'))) {
+      throw badRequest('A deposit collected is income under Rental Income; a deposit returned is expense under Security Deposit.')
+    }
+  }
   // Moving a row to other books: a misposting, or an owner draw taken from rent SLCM holds.
   let move: { propertyId: number | null; entityId: number } | null = null
   if (provided('property_id') || provided('entity_id')) {
@@ -445,7 +457,7 @@ async function buildPatch(row: Row, input: Input, allowed: readonly string[]) {
     if (await isDateClosed(row.property_id, row.txn_date)) throw closedError(row.txn_date)
     if (txnDate && (await isDateClosed(row.property_id, txnDate))) throw closedError(txnDate)
   }
-  return { category, amount, txnDate, descSet, description, rpSet, rentalPeriod, unitSet, unitId, move }
+  return { category, amount, txnDate, descSet, description, rpSet, rentalPeriod, unitSet, unitId, move, isDeposit }
 }
 
 export async function updateTransaction(id: number, input: Input, who: Actor) {
@@ -466,7 +478,8 @@ export async function updateTransaction(id: number, input: Input, who: Actor) {
         unit_id       = CASE WHEN ${p.unitSet}::boolean THEN ${p.unitId}::int
                              WHEN ${!!p.move}::boolean THEN NULL ELSE unit_id END,
         property_id   = CASE WHEN ${!!p.move}::boolean THEN ${p.move?.propertyId ?? null}::int ELSE property_id END,
-        entity_id     = CASE WHEN ${!!p.move}::boolean THEN ${p.move?.entityId ?? null}::int ELSE entity_id END
+        entity_id     = CASE WHEN ${!!p.move}::boolean THEN ${p.move?.entityId ?? null}::int ELSE entity_id END,
+        is_deposit    = COALESCE(${p.isDeposit}::boolean, is_deposit)
       WHERE id = ${id}
       RETURNING *
     )
