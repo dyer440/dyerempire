@@ -396,7 +396,7 @@ describe('reports', () => {
     const r = await call(Pnl.GET, { path: `/api/v1/pnl?property_id=${ids.pA}&from=2026-01-01&to=2026-03-31` })
     // income 3 × 1000 (the 2000 deposit excluded); expenses 724.06 tax + 150 repairs
     expect(r.json.data.totals).toEqual({
-      income: 3000, expense: 874.06, reserved_expense: 724.06, net_all_in: 2125.94, net_operating: 2850,
+      income: 3000, expense: 874.06, reserved_expense: 724.06, net_all_in: 2125.94, net_operating: 2850, owner_draws: 0,
     })
   })
   it('default scope is all property books, excluding entity books', async () => {
@@ -1264,6 +1264,8 @@ describe('owner draws and moving rows between books', () => {
     const m = await call(Txn.PATCH, { method: 'PATCH', params: { id: String(c.json.data.id) }, body: { property_id: ids.pB, category: 'Owner Distribution' } })
     expect(m.status).toBe(200)
     expect(m.json.data).toMatchObject({ property_id: ids.pB, category: 'Owner Distribution' })
+    const pnl = (await call(Pnl.GET, { path: `/api/v1/pnl?property_id=${ids.pB}&from=${lastMonth}-01&to=${to}` })).json.data.totals
+    expect(pnl.owner_draws).toBeGreaterThanOrEqual(77) // a draw is not an expense
     const bel1 = (await call(OwnerFunds.GET, { path: `/api/v1/owner-funds?from=${lastMonth}-01&to=${to}` })).json.data.properties.find((p: any) => p.property === 'Belford')
     expect(bel1.sent_to_owners).toBe(bel0.sent_to_owners + 77)
     expect(bel1.expenses_paid_by_slcm).toBe(bel0.expenses_paid_by_slcm)

@@ -18,12 +18,16 @@ const round = (n: number) => Math.round(n * 100) / 100
 
 type Agg = { property_id: number | null; ym: string; type: string; category: string; total: number }
 
-type Totals = { income: number; expense: number; reserved_expense: number; net_all_in: number; net_operating: number }
+type Totals = { income: number; expense: number; reserved_expense: number; net_all_in: number; net_operating: number; owner_draws: number }
+
+// Cash paid out to an owner is a use of the net, not an expense that reduces it.
+const OWNER_DRAW = 'Owner Distribution'
 
 function totalsOf(rows: Agg[]): Totals {
-  let income = 0, expense = 0, reserved = 0
+  let income = 0, expense = 0, reserved = 0, draws = 0
   for (const r of rows) {
     if (r.type === 'income') income += r.total
+    else if (r.category === OWNER_DRAW) draws += r.total
     else {
       expense += r.total
       if (RESERVED.has(r.category)) reserved += r.total
@@ -35,6 +39,7 @@ function totalsOf(rows: Agg[]): Totals {
     reserved_expense: round(reserved),
     net_all_in: round(income - expense),
     net_operating: round(income - (expense - reserved)),
+    owner_draws: round(draws),
   }
 }
 
